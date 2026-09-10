@@ -112,6 +112,7 @@ export function normalizeOnsen(input: OnsenInput): NormalizedOnsen {
     notReplicated,
     sourceWaterIgnored,
     batch,
+    notes: [...(input.notes ?? [])],
   }
   if (input.ph !== undefined) out.ph = input.ph
   if (input.temperature_c !== undefined) out.temperatureC = input.temperature_c

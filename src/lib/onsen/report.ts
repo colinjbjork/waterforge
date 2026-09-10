@@ -193,6 +193,7 @@ export function runOnsen(norm: NormalizedOnsen): OnsenResult {
       `source_water keys not modelled and ignored: ${norm.sourceWaterIgnored.join(', ')}.`,
     )
   }
+  for (const n of norm.notes) warnings.push(n)
 
   const out: OnsenResult = {
     name: norm.name,

@@ -16,12 +16,14 @@
 /// <reference types="node" />
 import { readFileSync } from 'node:fs'
 import {
+  fromOnsenOni,
   normalizeOnsen,
   renderMarkdown,
   renderText,
   runOnsen,
   validateOnsenInput,
 } from '../lib/onsen'
+import type { OnsenInput } from '../lib/onsen'
 
 export interface CliOutcome {
   code: number
@@ -30,20 +32,53 @@ export interface CliOutcome {
 }
 
 const USAGE = `usage: onsen [<analysis.json> | -] [--json | --markdown]
+             [--from-onsenoni [--source <n|id|name>]] [--bath <litres>[L|gal]]
   Reads the onsen analysis JSON from the given file (or stdin when omitted or
   "-") and prints a home-bath recipe as a bordered text report (default),
   as Markdown with --markdown, or as JSON with --json.
+  --from-onsenoni  the input is an Onsen Oni get_water_analysis payload
+                   (onsenoni.com via the OpenTabs plugin); --source picks
+                   which spring source when the place lists several.
+  --bath           override the bath volume, e.g. --bath 200 or --bath 60gal.
   Schema: docs/onsen-input.md`
 
 /** Pure entry point: argv (without node/script) + a stdin reader → outcome. */
 export function runCli(argv: string[], readStdin: () => string): CliOutcome {
   let json = false
   let markdown = false
+  let oniMode = false
+  let source: string | undefined
+  let bath: OnsenInput['bath_volume'] | undefined
   let path: string | undefined
-  for (const arg of argv) {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]
     if (arg === '--json') json = true
     else if (arg === '--markdown') markdown = true
-    else if (arg === '--help' || arg === '-h') {
+    else if (arg === '--from-onsenoni') oniMode = true
+    else if (arg === '--source') {
+      source = argv[++i]
+      if (source === undefined) {
+        return {
+          code: 2,
+          stdout: '',
+          stderr: `--source needs a value\n${USAGE}\n`,
+        }
+      }
+    } else if (arg === '--bath') {
+      const v = argv[++i] ?? ''
+      const m = /^(\d+(?:\.\d+)?)\s*(l|L|gal|GAL)?$/.exec(v)
+      if (!m) {
+        return {
+          code: 2,
+          stdout: '',
+          stderr: `--bath needs a number like 250 or 60gal\n${USAGE}\n`,
+        }
+      }
+      bath = {
+        value: Number(m[1]),
+        unit: m[2]?.toLowerCase() === 'gal' ? 'gal' : 'L',
+      }
+    } else if (arg === '--help' || arg === '-h') {
       return { code: 0, stdout: USAGE + '\n', stderr: '' }
     } else if (arg.startsWith('--')) {
       return {
@@ -90,6 +125,24 @@ export function runCli(argv: string[], readStdin: () => string): CliOutcome {
       stdout: '',
       stderr: `input is not valid JSON: ${(e as Error).message}\n`,
     }
+  }
+
+  if (oniMode) {
+    try {
+      const converted = fromOnsenOni(raw, {
+        ...(source !== undefined ? { source } : {}),
+        ...(bath ? { bathVolume: bath } : {}),
+      })
+      raw = converted.input
+    } catch (e) {
+      return {
+        code: 1,
+        stdout: '',
+        stderr: `onsenoni: ${(e as Error).message}\n`,
+      }
+    }
+  } else if (bath && typeof raw === 'object' && raw !== null) {
+    raw = { ...(raw as Record<string, unknown>), bath_volume: bath }
   }
 
   const validated = validateOnsenInput(raw)

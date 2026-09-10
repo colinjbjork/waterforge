@@ -39,6 +39,11 @@ export interface OnsenInput {
   bath_volume?: OnsenBathVolume
   /** Starting-water ions in mg/L (always mg/L, whatever `units` says). */
   source_water?: Record<string, number>
+  /**
+   * Free-text provenance / caveats to print under Warnings (e.g. the Onsen
+   * Oni extraction confidence). Never interpreted, only echoed.
+   */
+  notes?: string[]
 }
 
 /** Why a component on the card is not fitted by the solver. */
@@ -83,6 +88,8 @@ export interface NormalizedOnsen {
   /** `source_water` keys the engine does not model (ignored, but reported). */
   sourceWaterIgnored: string[]
   batch: Required<BatchOptions>
+  /** Caveats carried through from the input, echoed under Warnings. */
+  notes: string[]
 }
 
 /** Ion ids the solver actually fits — a re-export for callers of this module. */

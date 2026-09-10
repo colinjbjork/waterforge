@@ -122,6 +122,7 @@ export function validateOnsenInput(raw: unknown): OnsenValidationResult {
     'undissociated',
     'bath_volume',
     'source_water',
+    'notes',
   ])
   for (const key of Object.keys(raw)) {
     if (!KNOWN_FIELDS.has(key)) addError(errors, key, `unknown field '${key}'`)
@@ -169,6 +170,14 @@ export function validateOnsenInput(raw: unknown): OnsenValidationResult {
 
   // --- source water (always mg/L) ---
   validateGroup(raw['source_water'], 'source_water', 'mg/L', errors, new Map())
+
+  // --- notes (free text, echoed only) ---
+  const notes = raw['notes']
+  if (notes !== undefined) {
+    if (!Array.isArray(notes) || notes.some((n) => typeof n !== 'string')) {
+      addError(errors, 'notes', 'must be an array of strings when present')
+    }
+  }
 
   // --- bath volume ---
   const bath = raw['bath_volume']

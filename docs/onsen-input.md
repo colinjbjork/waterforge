@@ -11,6 +11,8 @@ npm run onsen -- <analysis.json>             # bordered plain-text report (defau
 npm run onsen -- <analysis.json> --markdown  # same report as Markdown, for files
 npm run onsen -- <analysis.json> --json      # same data as JSON
 cat analysis.json | npm run onsen --         # stdin
+npm run onsen -- oni.json --from-onsenoni    # input is an Onsen Oni get_water_analysis payload
+npm run onsen -- oni.json --from-onsenoni --source kutani --bath 60gal
 ```
 
 Exit codes: `0` success, `1` invalid input (each problem listed on stderr with
@@ -88,6 +90,28 @@ listed under "Not replicated" with a reason:
 Note `SO4` is fitted (gypsum, Epsom, Glauber's salt are sulfates); the
 exclusion is for the reduced-sulfur species that give sulfur springs their
 smell, which no bath-safe retail ingredient reproduces.
+
+### Onsen Oni payloads (`--from-onsenoni`)
+
+`onsenoni.com` publishes each spring's 温泉分析書 as data, and the OpenTabs
+`onsenoni` plugin's `get_water_analysis` tool returns it as JSON. Save that
+JSON and pass `--from-onsenoni`; `src/lib/onsen/onsenoni.ts` converts it:
+
+- block `CATION` → `cations`, `ANION` → `anions`, everything else
+  (`NON_DISSOCIATED`, `GAS`, trace blocks) → `undissociated`; units mg/kg.
+- components whose qualifier is not `EXACT` (`LESS_THAN` = below detection,
+  `UNKNOWN` = illegible) are dropped and named in the notes.
+- `measured.phSource` → `ph`, `measured.sourceTempC` → `temperature_c`,
+  `classification.springQualityFull` → `spring_type`; free CO₂ / H₂S from
+  `measured` are added when the table lacks them.
+- A place can list several sources. Default = the source with the most
+  `EXACT` components; `--source <index|id|name-substring>` picks another.
+  The others are listed in the notes.
+- The extraction confidence (`PARTIAL`, `LOW`) and the sheet's lab /
+  certificate line travel along as `notes`, printed under Warnings.
+
+`notes` is also a plain optional field on the canonical input: an array of
+strings echoed verbatim under Warnings.
 
 ## Output
 
