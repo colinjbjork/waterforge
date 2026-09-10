@@ -258,6 +258,23 @@ describe('exclusions: sulfur and iron', () => {
     expect(md).toContain('no sulfur or iron ingredient is suggested')
   })
 
+  it('iron aliases from real sheets (FeTotal, FeUnknownAlias) are excluded too', () => {
+    const norm = normalizeOnsen({
+      units: 'mg/kg',
+      cations: { Na: 10, FeTotal: 1.6, FeXyz: 0.2, Sx: 0.1 },
+    })
+    const byKey = Object.fromEntries(
+      norm.notReplicated.map((n) => [n.key, n.reason]),
+    )
+    expect(byKey.FeTotal).toBe('excluded-iron')
+    expect(byKey.FeXyz).toBe('excluded-iron')
+    expect(byKey.Sx).toBe('excluded-sulfur')
+    expect(
+      normalizeOnsen({ units: 'mg/kg', cations: { Sr: 1, Na: 1 } })
+        .notReplicated[0].reason,
+    ).toBe('no-ingredient')
+  })
+
   it('no salt in the palette contains reduced sulfur or iron', () => {
     for (const id of SALT_ORDER) {
       const salt = SALTS[id]

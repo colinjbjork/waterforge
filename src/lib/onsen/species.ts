@@ -96,6 +96,20 @@ export const EXTRA_SPECIES: Record<string, ExtraSpecies> = {
     label: 'total iron (Fe)',
     reason: 'excluded-iron',
   },
+  // Onsen Oni's code for the 総鉄 (total iron) row.
+  FeTotal: {
+    molarMass: W.Fe,
+    charge: 0,
+    label: 'total iron (Fe)',
+    reason: 'excluded-iron',
+  },
+  // --- reference only ------------------------------------------------------
+  H: {
+    molarMass: W.H,
+    charge: +1,
+    label: 'hydrogen ion (H⁺, acidity)',
+    reason: 'reference-only',
+  },
   // --- no ingredient in the palette -----------------------------------------
   HBO2: {
     molarMass: W.H + W.B + 2 * W.O,
@@ -211,6 +225,62 @@ export const EXTRA_SPECIES: Record<string, ExtraSpecies> = {
     label: 'metaarsenious acid (HAsO₂)',
     reason: 'no-ingredient',
   },
+  HSO4: {
+    molarMass: W.H + W.S + 4 * W.O,
+    charge: -1,
+    label: 'hydrogen sulfate (HSO₄⁻)',
+    reason: 'no-ingredient',
+  },
+  As: {
+    molarMass: W.As,
+    charge: 0,
+    label: 'arsenic, total (As)',
+    reason: 'no-ingredient',
+  },
+  CuTrace: {
+    molarMass: W.Cu,
+    charge: +2,
+    label: 'copper, trace (Cu)',
+    reason: 'no-ingredient',
+  },
+  Cd: {
+    molarMass: 112.414,
+    charge: +2,
+    label: 'cadmium (Cd²⁺)',
+    reason: 'no-ingredient',
+  },
+  Hg: {
+    molarMass: 200.592,
+    charge: +2,
+    label: 'mercury (Hg)',
+    reason: 'no-ingredient',
+  },
+  Pb: {
+    molarMass: 207.2,
+    charge: +2,
+    label: 'lead (Pb²⁺)',
+    reason: 'no-ingredient',
+  },
+}
+
+/**
+ * Why a non-fitted key is not replicated. Known species answer from the
+ * table; any unknown key that starts with `Fe` is still iron and any that
+ * starts with `S` followed by a digit or lower-case letter is a sulfur
+ * species — both excluded, so a new alias on a card can never slip an iron
+ * or sulfur ingredient past the policy.
+ */
+export function reasonFor(key: string): NotReplicatedReason {
+  const known = EXTRA_SPECIES[key]
+  if (known) return known.reason
+  if (/^Fe/i.test(key)) return 'excluded-iron'
+  if (
+    /^(HS|H2S|S2O3|S)(?![a-z])/i.test(key) &&
+    !/^(SO4|Sr|Si|Sb|Se|Sn)/.test(key)
+  ) {
+    return 'excluded-sulfur'
+  }
+  return 'no-ingredient'
 }
 
 /** Keys the solver fits (the engine's ion ids). */

@@ -10,7 +10,7 @@
 
 import { IONS, ION_ORDER } from '../chem/constants'
 import type { IonProfile } from '../solver/types'
-import { EXTRA_SPECIES, isFittedKey } from './species'
+import { EXTRA_SPECIES, isFittedKey, reasonFor } from './species'
 import { DEFAULT_BATH, ONSEN_GROUPS } from './types'
 import type {
   NormalizedOnsen,
@@ -82,7 +82,7 @@ export function normalizeOnsen(input: OnsenInput): NormalizedOnsen {
         group,
         reported: value,
         unit,
-        reason: extra?.reason ?? 'no-ingredient',
+        reason: reasonFor(key),
       }
       if (mgPerL !== undefined) entry.mgPerL = mgPerL
       notReplicated.push(entry)
