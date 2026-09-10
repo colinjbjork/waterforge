@@ -19,14 +19,84 @@
 //   the report prints under Warnings — a LOW-confidence sheet is still a
 //   recipe, but the reader should know the digits were hard to read.
 
+import { IONS } from '../chem/constants'
+import { EXTRA_SPECIES, isFittedKey } from './species'
 import type { OnsenInput } from './types'
 
 export interface OnsenOniComponent {
   block?: string
   code?: string
   mg?: number | null
+  /** Share of the block's total equivalents, in percent. */
+  mvalPct?: number | null
   qualifier?: string
   name?: string
+}
+
+/** Molar mass and |charge| for a code, from the engine's table or the extras. */
+function speciesMass(
+  code: string,
+): { molarMass: number; z: number } | undefined {
+  if (isFittedKey(code)) {
+    const ion = IONS[code]
+    return { molarMass: ion.molarMass, z: Math.abs(ion.charge) }
+  }
+  const extra = EXTRA_SPECIES[code]
+  return extra
+    ? { molarMass: extra.molarMass, z: Math.abs(extra.charge) }
+    : undefined
+}
+
+/**
+ * Total equivalents (mval/kg) of a block, inferred from any component that
+ * has BOTH an mg value and an mval% share: total = mval(component) / share.
+ * Uses the largest such component (least rounding error). Undefined when no
+ * component in the block carries both.
+ */
+export function blockTotalMval(
+  components: OnsenOniComponent[],
+): number | undefined {
+  let best: number | undefined
+  let bestMg = -1
+  for (const c of components) {
+    if (
+      typeof c.mg !== 'number' ||
+      typeof c.mvalPct !== 'number' ||
+      c.mvalPct <= 0 ||
+      !c.code
+    ) {
+      continue
+    }
+    const sm = speciesMass(c.code)
+    if (!sm || sm.z === 0) continue
+    if (c.mg > bestMg) {
+      bestMg = c.mg
+      best = ((c.mg / sm.molarMass) * sm.z) / (c.mvalPct / 100)
+    }
+  }
+  return best
+}
+
+/**
+ * mg/kg for a component whose mg cell was unreadable but whose mval% share
+ * survived: mg = share × blockTotal × M ÷ |z|. Undefined when it cannot be
+ * derived (no share, unknown species, neutral species, or no block total).
+ */
+export function mgFromMvalPct(
+  c: OnsenOniComponent,
+  blockTotal: number | undefined,
+): number | undefined {
+  if (
+    blockTotal === undefined ||
+    typeof c.mvalPct !== 'number' ||
+    c.mvalPct <= 0 ||
+    !c.code
+  ) {
+    return undefined
+  }
+  const sm = speciesMass(c.code)
+  if (!sm || sm.z === 0) return undefined
+  return ((c.mvalPct / 100) * blockTotal * sm.molarMass) / sm.z
 }
 
 export interface OnsenOniSource {
@@ -177,16 +247,35 @@ export function fromOnsenOni(
   const notes: string[] = []
   const dropped: string[] = []
 
+  const reconstructed: string[] = []
+  const blockTotals = {
+    CATION: blockTotalMval(a.components.filter((c) => c.block === 'CATION')),
+    ANION: blockTotalMval(a.components.filter((c) => c.block === 'ANION')),
+  }
+
   for (const c of a.components) {
     const code = (c.code ?? '').trim()
     if (!code) continue
-    if (
-      c.qualifier !== 'EXACT' ||
-      typeof c.mg !== 'number' ||
-      !isFinite(c.mg)
-    ) {
+    let mg = typeof c.mg === 'number' && isFinite(c.mg) ? c.mg : undefined
+    if (mg === undefined && c.qualifier === 'EXACT') {
+      // The lab printed a value but the photo was unreadable in the mg cell;
+      // if the mval% cell survived, the row can be rebuilt from the block's
+      // total equivalents (the same conversion an mval card uses).
+      const total =
+        c.block === 'CATION' || c.block === 'ANION'
+          ? blockTotals[c.block]
+          : undefined
+      const derived = mgFromMvalPct(c, total)
+      if (derived !== undefined) {
+        mg = derived
+        reconstructed.push(
+          `${code} ≈ ${derived.toFixed(1)} mg/kg (${c.mvalPct}% of block mval)`,
+        )
+      }
+    }
+    if (c.qualifier !== 'EXACT' || mg === undefined) {
       dropped.push(
-        `${code} (${c.qualifier === 'LESS_THAN' ? 'below detection' : (c.qualifier?.toLowerCase() ?? 'no value')})`,
+        `${code} (${c.qualifier === 'LESS_THAN' ? 'below detection' : c.qualifier === 'EXACT' ? 'mg cell unreadable' : (c.qualifier?.toLowerCase() ?? 'no value')})`,
       )
       continue
     }
@@ -196,7 +285,7 @@ export function fromOnsenOni(
         : c.block === 'ANION'
           ? anions
           : undissociated
-    bucket[code] = (bucket[code] ?? 0) + c.mg
+    bucket[code] = (bucket[code] ?? 0) + mg
   }
 
   const m = a.measured ?? {}
@@ -229,6 +318,11 @@ export function fromOnsenOni(
   if (conf && conf !== 'HIGH') {
     notes.push(
       `Onsen Oni extraction confidence for this sheet is ${conf}${a.extraction?.lowConfidenceNotes ? ': ' + a.extraction.lowConfidenceNotes : '.'}`,
+    )
+  }
+  if (reconstructed.length) {
+    notes.push(
+      `Rebuilt from the mval% column because the mg cell was unreadable: ${reconstructed.join('; ')}.`,
     )
   }
   if (dropped.length) {

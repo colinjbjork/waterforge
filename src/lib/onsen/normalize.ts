@@ -76,7 +76,6 @@ export function normalizeOnsen(input: OnsenInput): NormalizedOnsen {
         continue
       }
 
-      const extra = EXTRA_SPECIES[key]
       const entry: NotReplicated = {
         key,
         group,

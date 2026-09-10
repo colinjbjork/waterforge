@@ -273,13 +273,10 @@ export const EXTRA_SPECIES: Record<string, ExtraSpecies> = {
 export function reasonFor(key: string): NotReplicatedReason {
   const known = EXTRA_SPECIES[key]
   if (known) return known.reason
-  if (/^Fe/i.test(key)) return 'excluded-iron'
-  if (
-    /^(HS|H2S|S2O3|S)(?![a-z])/i.test(key) &&
-    !/^(SO4|Sr|Si|Sb|Se|Sn)/.test(key)
-  ) {
-    return 'excluded-sulfur'
-  }
+  if (/^Fe/.test(key)) return 'excluded-iron'
+  // S, HS, H2S, S2O3 and upper-case-continued aliases (STotal); a lower-case
+  // second letter is another element (Sr, Si, Sb, Se, Sn).
+  if (/^(HS|H2S|S2O3|S)(?![a-z])/.test(key)) return 'excluded-sulfur'
   return 'no-ingredient'
 }
 

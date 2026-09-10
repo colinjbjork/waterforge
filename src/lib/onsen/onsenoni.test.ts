@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { fromOnsenOni, pickSource } from './onsenoni'
+import {
+  blockTotalMval,
+  fromOnsenOni,
+  mgFromMvalPct,
+  pickSource,
+} from './onsenoni'
 import {
   normalizeOnsen,
   renderText,
@@ -150,6 +155,55 @@ describe('fromOnsenOni', () => {
       Na: 4358,
     })
     expect(() => fromOnsenOni(PAYLOAD, { source: 'nope' })).toThrow(/not found/)
+  })
+
+  it('rebuilds an unreadable mg cell from its mval% share (Taki no Yu pattern)', () => {
+    // Na has both mg and mval%; Mg and Fe2 have only mval%. Total cation mval
+    // = (184.6/22.99)/0.4527 = 17.737; Mg = 7.71% of that = 1.3675 mval =
+    // 16.62 mg; Fe2 = 6.97% = 1.2363 mval = 34.52 mg.
+    const comps = [
+      {
+        block: 'CATION',
+        code: 'Na',
+        mg: 184.6,
+        mvalPct: 45.27,
+        qualifier: 'EXACT',
+      },
+      {
+        block: 'CATION',
+        code: 'Mg',
+        mg: null,
+        mvalPct: 7.71,
+        qualifier: 'EXACT',
+      },
+      {
+        block: 'CATION',
+        code: 'Fe2',
+        mg: null,
+        mvalPct: 6.97,
+        qualifier: 'EXACT',
+      },
+      {
+        block: 'ANION',
+        code: 'SO4',
+        mg: 599.3,
+        mvalPct: 78.99,
+        qualifier: 'EXACT',
+      },
+    ]
+    const total = blockTotalMval(comps.filter((c) => c.block === 'CATION'))!
+    expect(total).toBeCloseTo(184.6 / 22.99 / 0.4527, 3)
+    expect(mgFromMvalPct(comps[1], total)).toBeCloseTo(16.62, 1)
+    expect(mgFromMvalPct(comps[2], total)).toBeCloseTo(34.52, 1)
+    const { input } = fromOnsenOni({
+      hasAnalysis: true,
+      place: { nameEn: 'T' },
+      sources: [{ nameEn: 's', analysis: { components: comps, measured: {} } }],
+    })
+    expect(input.cations?.Mg).toBeCloseTo(16.62, 1)
+    expect(input.cations?.Fe2).toBeCloseTo(34.52, 1)
+    expect(input.notes?.join('\n')).toContain('Rebuilt from the mval% column')
+    expect(input.notes?.join('\n')).toContain('Mg ≈ 16.6 mg/kg')
   })
 
   it('refuses a place with no analysis', () => {
