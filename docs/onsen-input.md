@@ -7,9 +7,10 @@ accepts and what it prints. The engine changes behind it are summarised at the
 end.
 
 ```
-npm run onsen -- <analysis.json>          # Markdown report
-npm run onsen -- <analysis.json> --json   # same data as JSON
-cat analysis.json | npm run onsen --      # stdin
+npm run onsen -- <analysis.json>             # bordered plain-text report (default)
+npm run onsen -- <analysis.json> --markdown  # same report as Markdown, for files
+npm run onsen -- <analysis.json> --json      # same data as JSON
+cat analysis.json | npm run onsen --         # stdin
 ```
 
 Exit codes: `0` success, `1` invalid input (each problem listed on stderr with
@@ -88,7 +89,11 @@ Note `SO4` is fitted (gypsum, Epsom, Glauber's salt are sulfates); the
 exclusion is for the reduced-sulfur species that give sulfur springs their
 smell, which no bath-safe retail ingredient reproduces.
 
-## Output (Markdown)
+## Output
+
+The default is plain text with box-drawing bordered tables (readable in a
+terminal, no rendering needed); `--markdown` gives the same sections as
+Markdown tables for pasting into a file. Sections:
 
 ```
 # Onsen bath recipe — <name>

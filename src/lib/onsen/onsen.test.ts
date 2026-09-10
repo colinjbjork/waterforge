@@ -4,7 +4,9 @@ import {
   EXTRA_SPECIES,
   mvalToMg,
   normalizeOnsen,
+  boxTable,
   renderMarkdown,
+  renderText,
   runOnsen,
   toMgPerL,
   validateOnsenInput,
@@ -292,6 +294,39 @@ describe('alkaline card: sodium carbonate + baking soda', () => {
     const md = renderMarkdown(r)
     expect(md).toMatch(/Approximate pH ≈ \d+\.\d/)
     expect(md).toContain('Card pH: 9.5')
+  })
+})
+
+describe('bordered text report (CLI default)', () => {
+  it('draws a box table with aligned, padded columns', () => {
+    const t = boxTable(
+      ['Ion', 'mg/L'],
+      [
+        ['Na', '820.0'],
+        ['Cl', '1150.0'],
+      ],
+      ['left', 'right'],
+    )
+    const lines = t.split('\n')
+    expect(lines[0]).toBe('┌─────┬────────┐')
+    expect(lines[1]).toBe('│ Ion │   mg/L │')
+    expect(lines[2]).toBe('├─────┼────────┤')
+    expect(lines[3]).toBe('│ Na  │  820.0 │')
+    expect(lines[4]).toBe('│ Cl  │ 1150.0 │')
+    expect(lines[5]).toBe('└─────┴────────┘')
+    // every row is the same width
+    expect(new Set(lines.map((l) => [...l].length)).size).toBe(1)
+  })
+
+  it('renders every section with box borders and no markdown pipe table', () => {
+    const txt = renderText(runOnsen(normalizeOnsen(EXAMPLE)))
+    for (const h of ['RECIPE', 'MATCH', 'NOT REPLICATED', 'WARNINGS']) {
+      expect(txt).toContain(h)
+    }
+    expect(txt).toContain('┌')
+    expect(txt).toContain('│ Ingredient')
+    expect(txt).not.toMatch(/^\|.*\|$/m)
+    expect(txt).not.toMatch(/\|\s*---/)
   })
 })
 
