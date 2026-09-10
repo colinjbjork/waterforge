@@ -5,7 +5,8 @@
 // grid — instead of a markdown pipe table, which is unreadable un-rendered.
 
 import { speciesLabel } from './species'
-import type { NotReplicated, OnsenResult } from './report'
+import type { OnsenResult } from './report'
+import type { NotReplicated } from './types'
 
 type Align = 'left' | 'right'
 
