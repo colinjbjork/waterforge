@@ -76,6 +76,11 @@ function chargeResidualOf(profile: Partial<Record<IonId, number>>): number {
 
 export const LITRES_PER_US_GALLON = 3.785411784
 
+/** Doses below this (g/L) are numerical dust from the fit and are not printed. */
+export const MIN_DOSE_G_PER_L = 0.0005
+/** Ions the card does not list are only shown/warned about above this (mg/L). */
+export const MIN_VISIBLE_MG_PER_L = 0.05
+
 /** Solve a normalised card with relative weighting over the full palette. */
 export function runOnsen(norm: NormalizedOnsen): OnsenResult {
   const result: SolveResult = solve(
@@ -92,7 +97,7 @@ export function runOnsen(norm: NormalizedOnsen): OnsenResult {
       : norm.batch.volume
 
   const recipe: RecipeLine[] = SALT_ORDER.filter(
-    (id) => (result.recipe[id] ?? 0) > 0,
+    (id) => (result.dosePerLitre[id] ?? 0) >= MIN_DOSE_G_PER_L,
   ).map((id) => ({
     saltId: id,
     purchaseName: SALTS[id].purchaseName,
@@ -104,7 +109,8 @@ export function runOnsen(norm: NormalizedOnsen): OnsenResult {
 
   const match: MatchLine[] = ION_ORDER.filter(
     (ion) =>
-      (norm.target[ion] ?? 0) !== 0 || (result.resultProfile[ion] ?? 0) !== 0,
+      (norm.target[ion] ?? 0) !== 0 ||
+      (result.resultProfile[ion] ?? 0) >= MIN_VISIBLE_MG_PER_L,
   ).map((ion) => {
     const target = norm.target[ion] ?? 0
     const res = result.resultProfile[ion] ?? 0
@@ -148,7 +154,7 @@ export function runOnsen(norm: NormalizedOnsen): OnsenResult {
         `${m.label}: recipe gives ${m.result.toFixed(1)} mg/L vs ${m.target.toFixed(1)} mg/L on the card (${m.diffPct >= 0 ? '+' : ''}${m.diffPct.toFixed(0)}%).`,
       )
     }
-    if (m.target === 0 && m.result > 0) {
+    if (m.target === 0 && m.result >= MIN_VISIBLE_MG_PER_L) {
       warnings.push(
         `${m.label}: ${m.result.toFixed(1)} mg/L added as a by-product of another salt (not on the card).`,
       )
