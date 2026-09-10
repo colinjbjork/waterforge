@@ -12,7 +12,8 @@
     "typecheck": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
     "test": "vitest run",
     "lint": "eslint . && prettier --check . && node scripts/check-shadcn-data-attrs.mjs",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "onsen": "node scripts/onsen.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

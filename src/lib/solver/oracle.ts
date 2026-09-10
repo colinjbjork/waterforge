@@ -31,6 +31,13 @@ const DRIVER_ION: Record<SaltId, IonId> = {
   bakingSoda: 'HCO3',
   chalk: 'HCO3',
   potassiumBicarbonate: 'K',
+  // Onsen fork salts: each drives the ion it uniquely (or primarily) supplies.
+  sodiumCarbonate: 'CO3',
+  sodiumCarbonateDecahydrate: 'CO3',
+  sodiumSulfateDecahydrate: 'SO4',
+  sodiumSulfate: 'SO4',
+  potassiumChloride: 'K',
+  sodiumMetasilicate: 'H2SiO3',
 }
 
 /**

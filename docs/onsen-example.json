@@ -1,0 +1,26 @@
+{
+  "name": "Example Onsen, Source No. 1",
+  "units": "mg/kg",
+  "ph": 8.4,
+  "temperature_c": 52.0,
+  "spring_type": "Sodium-Chloride",
+  "cations": { "Na": 820.0, "K": 35.0, "Ca": 60.0, "Mg": 4.2, "Fe2": 0.3 },
+  "anions": {
+    "Cl": 1150.0,
+    "SO4": 210.0,
+    "HCO3": 180.0,
+    "CO3": 6.0,
+    "OH": 0.1,
+    "HS": 1.2
+  },
+  "undissociated": { "H2SiO3": 95.0, "HBO2": 12.0, "CO2": 3.0, "H2S": 0.8 },
+  "bath_volume": { "value": 250, "unit": "L" },
+  "source_water": {
+    "Ca": 8.0,
+    "Mg": 2.0,
+    "Na": 5.0,
+    "HCO3": 30.0,
+    "Cl": 4.0,
+    "SO4": 3.0
+  }
+}

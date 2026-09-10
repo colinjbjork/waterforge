@@ -5,8 +5,15 @@
 // so the numbers stay auditable: nothing is hand-tuned. Background on the ions
 // and salts modelled lives in the chemistry guides under `docs/`.
 
-/** The seven ions Waterforge tracks, by their conventional symbols. */
-export type IonId = 'Ca' | 'Mg' | 'Na' | 'K' | 'HCO3' | 'SO4' | 'Cl'
+/**
+ * The ions Waterforge tracks, by their conventional symbols.
+ *
+ * The seven drinking-water ions come first. The onsen fork adds carbonate
+ * (CO3, charge -2) for alkaline hot-spring waters, and metasilicic acid
+ * (H2SiO3, charge 0 — an undissociated species tracked by mass).
+ */
+export type IonId =
+  'Ca' | 'Mg' | 'Na' | 'K' | 'HCO3' | 'SO4' | 'Cl' | 'CO3' | 'H2SiO3'
 
 /** The food-grade salts Waterforge can dose. */
 export type SaltId =
@@ -19,6 +26,13 @@ export type SaltId =
   | 'chalk'
   | 'magnesiumChloride'
   | 'potassiumBicarbonate'
+  // Onsen fork additions (see docs/onsen-input.md).
+  | 'sodiumCarbonate'
+  | 'sodiumCarbonateDecahydrate'
+  | 'sodiumSulfateDecahydrate'
+  | 'sodiumSulfate'
+  | 'potassiumChloride'
+  | 'sodiumMetasilicate'
 
 // Atomic / elemental weights (g/mol). Standard atomic weights at the precision
 // the source method uses; group weights below are summed from these.
@@ -32,6 +46,7 @@ export const ATOMIC_WEIGHTS = {
   H: 1.008,
   C: 12.011,
   Cl: 35.45,
+  Si: 28.085,
 } as const
 
 // Group weights derived from the atomic weights above. Summing them here (rather
@@ -42,6 +57,23 @@ export const HCO3_WEIGHT =
 export const CO3_WEIGHT = ATOMIC_WEIGHTS.C + 3 * ATOMIC_WEIGHTS.O // 60.009
 export const CACO3_WEIGHT =
   ATOMIC_WEIGHTS.Ca + ATOMIC_WEIGHTS.C + 3 * ATOMIC_WEIGHTS.O // 100.087
+export const H2O_WEIGHT = 2 * ATOMIC_WEIGHTS.H + ATOMIC_WEIGHTS.O // 18.015
+export const H2SIO3_WEIGHT =
+  2 * ATOMIC_WEIGHTS.H + ATOMIC_WEIGHTS.Si + 3 * ATOMIC_WEIGHTS.O // 78.098
+export const OH_WEIGHT = ATOMIC_WEIGHTS.O + ATOMIC_WEIGHTS.H // 17.007
+
+// Molar masses of the onsen-fork salts, summed from the atomic weights above
+// (water of hydration included) rather than quoted, so they stay auditable.
+export const NA2CO3_WEIGHT = 2 * ATOMIC_WEIGHTS.Na + CO3_WEIGHT // 105.989
+export const NA2CO3_10H2O_WEIGHT = NA2CO3_WEIGHT + 10 * H2O_WEIGHT // 286.139
+export const NA2SO4_WEIGHT = 2 * ATOMIC_WEIGHTS.Na + SO4_WEIGHT // 142.036
+export const NA2SO4_10H2O_WEIGHT = NA2SO4_WEIGHT + 10 * H2O_WEIGHT // 322.186
+export const KCL_WEIGHT = ATOMIC_WEIGHTS.K + ATOMIC_WEIGHTS.Cl // 74.548
+export const NA2SIO3_5H2O_WEIGHT =
+  2 * ATOMIC_WEIGHTS.Na +
+  ATOMIC_WEIGHTS.Si +
+  3 * ATOMIC_WEIGHTS.O +
+  5 * H2O_WEIGHT // 212.137
 
 /** Molar mass of CaCO3, the reference compound for alkalinity expressed as-CaCO3. */
 export const CACO3_MOLAR_MASS = CACO3_WEIGHT
@@ -66,6 +98,9 @@ export const IONS: Record<IonId, Ion> = {
   HCO3: { id: 'HCO3', charge: -1, molarMass: HCO3_WEIGHT },
   SO4: { id: 'SO4', charge: -2, molarMass: SO4_WEIGHT },
   Cl: { id: 'Cl', charge: -1, molarMass: ATOMIC_WEIGHTS.Cl },
+  CO3: { id: 'CO3', charge: -2, molarMass: CO3_WEIGHT },
+  // Metasilicic acid is undissociated at bath pH: no charge, tracked by mass.
+  H2SiO3: { id: 'H2SiO3', charge: 0, molarMass: H2SIO3_WEIGHT },
 }
 
 /** Stable iteration order for ions (cations then anions). */
@@ -77,12 +112,19 @@ export const ION_ORDER: readonly IonId[] = [
   'HCO3',
   'SO4',
   'Cl',
+  'CO3',
+  'H2SiO3',
 ]
 
 export interface Salt {
   readonly id: SaltId
   /** Human-readable name. */
   readonly name: string
+  /**
+   * Plain product name a person would look for in a store (e.g. "Epsom salt",
+   * "pickling/canning salt"). Used by the onsen CLI's recipe table.
+   */
+  readonly purchaseName: string
   /** Chemical formula, including any water of hydration. */
   readonly formula: string
   /** Molar mass in g/mol, INCLUDING water of hydration. */
@@ -91,11 +133,20 @@ export interface Salt {
   // dissolves to Ca plus carbonate; in carbonate water chemistry that carbonate
   // is accounted as bicarbonate alkalinity (HCO3), matching the source method.
   readonly stoichiometry: Partial<Record<IonId, number>>
+  /**
+   * Net charge (per mole of salt) of the ions the model tracks, when the salt
+   * is deliberately NOT charge-balanced in the model. Omitted (zero) for every
+   * ordinary salt. Sodium metasilicate is the one exception: it is modelled as
+   * 2 Na+ plus neutral H2SiO3, so the +2 the hydroxide would balance is left
+   * visible in the charge-residual readout instead of being modelled.
+   */
+  readonly netCharge?: number
 }
 
 export const SALTS: Record<SaltId, Salt> = {
   gypsum: {
     id: 'gypsum',
+    purchaseName: 'gypsum brewing salt',
     name: 'Gypsum',
     formula: 'CaSO4·2H2O',
     molarMass: 172.17,
@@ -103,6 +154,7 @@ export const SALTS: Record<SaltId, Salt> = {
   },
   epsom: {
     id: 'epsom',
+    purchaseName: 'Epsom salt',
     name: 'Epsom salt',
     formula: 'MgSO4·7H2O',
     molarMass: 246.47,
@@ -110,6 +162,7 @@ export const SALTS: Record<SaltId, Salt> = {
   },
   tableSalt: {
     id: 'tableSalt',
+    purchaseName: 'pickling/canning salt (plain, non-iodised NaCl)',
     name: 'Table salt',
     formula: 'NaCl',
     molarMass: 58.44,
@@ -117,6 +170,7 @@ export const SALTS: Record<SaltId, Salt> = {
   },
   calciumChloride: {
     id: 'calciumChloride',
+    purchaseName: 'calcium chloride brewing salt (dihydrate)',
     name: 'Calcium Chloride (Dihydrate)',
     formula: 'CaCl2·2H2O',
     molarMass: 147.01,
@@ -124,6 +178,7 @@ export const SALTS: Record<SaltId, Salt> = {
   },
   calciumChlorideAnhydrous: {
     id: 'calciumChlorideAnhydrous',
+    purchaseName: 'calcium chloride brewing salt (anhydrous pellets)',
     name: 'Calcium Chloride (Anhydrous)',
     // Same ions as the dihydrate; only the molar mass (no water of hydration)
     // differs, so the gram dose per unit of Ca/Cl is lower. Common in brewing
@@ -134,6 +189,7 @@ export const SALTS: Record<SaltId, Salt> = {
   },
   bakingSoda: {
     id: 'bakingSoda',
+    purchaseName: 'baking soda',
     name: 'Baking soda',
     formula: 'NaHCO3',
     molarMass: 84.007,
@@ -141,6 +197,7 @@ export const SALTS: Record<SaltId, Salt> = {
   },
   chalk: {
     id: 'chalk',
+    purchaseName: 'calcium carbonate / chalk brewing salt',
     name: 'Calcium Carbonate (Chalk)',
     formula: 'CaCO3',
     molarMass: 100.087,
@@ -151,6 +208,7 @@ export const SALTS: Record<SaltId, Salt> = {
   },
   magnesiumChloride: {
     id: 'magnesiumChloride',
+    purchaseName: 'magnesium chloride flakes',
     name: 'Magnesium chloride hexahydrate',
     formula: 'MgCl2·6H2O',
     molarMass: 203.3,
@@ -158,10 +216,69 @@ export const SALTS: Record<SaltId, Salt> = {
   },
   potassiumBicarbonate: {
     id: 'potassiumBicarbonate',
+    purchaseName: 'potassium bicarbonate',
     name: 'Potassium bicarbonate',
     formula: 'KHCO3',
     molarMass: 100.115,
     stoichiometry: { K: 1, HCO3: 1 },
+  },
+
+  // --- Onsen fork additions ---------------------------------------------
+  // Sit at the END of SALT_ORDER so the drinking-water recipe policy (ADR 0009)
+  // never reaches for them unless they lower the residual.
+  sodiumCarbonate: {
+    id: 'sodiumCarbonate',
+    purchaseName: 'soda ash / pool pH increaser',
+    name: 'Sodium carbonate (anhydrous)',
+    formula: 'Na2CO3',
+    molarMass: NA2CO3_WEIGHT,
+    stoichiometry: { Na: 2, CO3: 1 },
+  },
+  sodiumCarbonateDecahydrate: {
+    id: 'sodiumCarbonateDecahydrate',
+    purchaseName: 'washing soda (sodium carbonate decahydrate)',
+    name: 'Sodium carbonate decahydrate',
+    formula: 'Na2CO3·10H2O',
+    molarMass: NA2CO3_10H2O_WEIGHT,
+    stoichiometry: { Na: 2, CO3: 1 },
+  },
+  sodiumSulfateDecahydrate: {
+    id: 'sodiumSulfateDecahydrate',
+    purchaseName: "Glauber's salt (sodium sulfate decahydrate)",
+    name: 'Sodium sulfate decahydrate',
+    formula: 'Na2SO4·10H2O',
+    molarMass: NA2SO4_10H2O_WEIGHT,
+    stoichiometry: { Na: 2, SO4: 1 },
+  },
+  sodiumSulfate: {
+    id: 'sodiumSulfate',
+    purchaseName: 'sodium sulfate (anhydrous)',
+    name: 'Sodium sulfate (anhydrous)',
+    formula: 'Na2SO4',
+    molarMass: NA2SO4_WEIGHT,
+    stoichiometry: { Na: 2, SO4: 1 },
+  },
+  potassiumChloride: {
+    id: 'potassiumChloride',
+    purchaseName:
+      'potassium chloride (NoSalt salt substitute / KCl softener pellets)',
+    name: 'Potassium chloride',
+    formula: 'KCl',
+    molarMass: KCL_WEIGHT,
+    stoichiometry: { K: 1, Cl: 1 },
+  },
+  sodiumMetasilicate: {
+    id: 'sodiumMetasilicate',
+    purchaseName: 'sodium metasilicate pentahydrate',
+    name: 'Sodium metasilicate pentahydrate',
+    formula: 'Na2SiO3·5H2O',
+    molarMass: NA2SIO3_5H2O_WEIGHT,
+    // Dissolves to 2 Na+ and silicate, which at bath pH is carried as
+    // metasilicic acid (H2SiO3, neutral) plus 2 OH-. Hydroxide is not a
+    // modelled ion, so the +2 is declared here and shows up in the
+    // charge-residual readout rather than being hidden.
+    stoichiometry: { Na: 2, H2SiO3: 1 },
+    netCharge: +2,
   },
 }
 
@@ -176,4 +293,11 @@ export const SALT_ORDER: readonly SaltId[] = [
   'chalk',
   'magnesiumChloride',
   'potassiumBicarbonate',
+  // Onsen fork additions, lowest priority.
+  'sodiumCarbonate',
+  'sodiumCarbonateDecahydrate',
+  'sodiumSulfateDecahydrate',
+  'sodiumSulfate',
+  'potassiumChloride',
+  'sodiumMetasilicate',
 ]

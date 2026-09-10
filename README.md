@@ -1,5 +1,13 @@
 # Waterforge
 
+> **Onsen fork (branch `onsen`).** This is a privately modified fork of
+> Waterforge for reproducing Japanese hot-spring (温泉) mineral analyses in a
+> home bath. It adds carbonate and metasilicic acid to the ion model, six
+> extra salts, an opt-in relative-weighted fit, and an `npm run onsen` CLI
+> (schema in [docs/onsen-input.md](docs/onsen-input.md)). Upstream is
+> [cacack/waterforge](https://github.com/cacack/waterforge); GPL-3.0-or-later
+> and CC-BY-SA-4.0 licences are unchanged. Not published, not a PR.
+
 Clone bottled mineral waters from distilled (or known-source) water and
 food-grade salts. Waterforge is a static, client-side web app: pick a target
 profile, set your source water, toggle the salts you own, and get a precise,

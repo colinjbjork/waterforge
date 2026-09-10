@@ -40,6 +40,28 @@ export interface Readouts {
    * equivalents). Near zero for a well-balanced profile.
    */
   chargeResidual: number
+  /**
+   * Approximate pH from the carbonate/bicarbonate ratio, present only when the
+   * result contains BOTH HCO3 and CO3: pH ≈ pKa2 (10.33) + log10(mol CO3 / mol
+   * HCO3). Activity corrections are ignored, so treat it as a rough guide.
+   */
+  phEstimate?: number
+}
+
+/**
+ * How the per-ion residuals are weighted in the least-squares fit.
+ *
+ * - `'absolute'` (default): plain mg/L residuals — the original behaviour, so
+ *   large ions dominate the fit.
+ * - `'relative'`: each ion row is scaled by 1 / max(target mg/L, 1) so a 5 mg/L
+ *   ion and a 1000 mg/L ion count equally in percentage terms. Used by the
+ *   onsen CLI where minor ions carry the character of the water.
+ */
+export type Weighting = 'absolute' | 'relative'
+
+export interface SolveOptions {
+  /** Residual weighting; defaults to `'absolute'`. */
+  weighting?: Weighting
 }
 
 export interface SolveResult {

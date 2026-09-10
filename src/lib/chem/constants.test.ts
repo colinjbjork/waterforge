@@ -61,13 +61,25 @@ describe('salt charge balance', () => {
   // A dissolved salt is electrically neutral: the signed charges of the ions it
   // releases must sum to zero. This invariant guards every salt's stoichiometry
   // — e.g. it catches modelling CaCO3 as Ca + 1 HCO3 rather than Ca + 2 HCO3.
-  it('every salt releases ions that sum to zero net charge', () => {
+  // The onsen fork's sodium metasilicate is the one declared exception: its
+  // silicate is carried as neutral H2SiO3 and the balancing hydroxide is not a
+  // modelled ion, so the salt declares `netCharge: +2` and the residual shows
+  // in the charge readout instead. Every other salt must still be zero.
+  it('every salt releases ions that sum to its declared net charge (zero unless stated)', () => {
     for (const id of SALT_ORDER) {
       let charge = 0
       for (const [ion, moles] of Object.entries(SALTS[id].stoichiometry)) {
         charge += IONS[ion as keyof typeof IONS].charge * (moles ?? 0)
       }
-      expect(charge, `${id} should be charge-balanced`).toBe(0)
+      expect(charge, `${id} should be charge-balanced`).toBe(
+        SALTS[id].netCharge ?? 0,
+      )
     }
+  })
+
+  it('only sodium metasilicate declares a net charge', () => {
+    const declared = SALT_ORDER.filter((id) => SALTS[id].netCharge)
+    expect(declared).toEqual(['sodiumMetasilicate'])
+    expect(SALTS.sodiumMetasilicate.netCharge).toBe(+2)
   })
 })
