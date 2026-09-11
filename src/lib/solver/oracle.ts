@@ -38,6 +38,8 @@ const DRIVER_ION: Record<SaltId, IonId> = {
   sodiumSulfate: 'SO4',
   potassiumChloride: 'K',
   sodiumMetasilicate: 'H2SiO3',
+  // Bath-only acid (not in SALT_ORDER); listed so the record stays total.
+  hydrochloricAcid: 'Cl',
 }
 
 /**

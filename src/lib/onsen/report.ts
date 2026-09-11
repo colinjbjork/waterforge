@@ -2,13 +2,30 @@
 //
 // The fit uses `'relative'` weighting (each ion row scaled by 1/max(target, 1))
 // over the FULL salt palette, so a 6 mg/L carbonate figure matters as much as
-// an 820 mg/L sodium figure. Output is a plain data object (for `--json`) plus
-// a Markdown renderer.
+// an 820 mg/L sodium figure. After the fit, the hydroxide the salts release
+// (sodium metasilicate: 2 OH⁻ per mole) is cancelled stoichiometrically with
+// hydrochloric acid, the acid's chloride is credited back to the fit, and the
+// bath pH / precipitation are estimated on the final profile — see
+// `chemistry.ts`. Output is a plain data object (for `--json`) plus a
+// Markdown renderer.
 
-import { IONS, ION_ORDER, SALTS, SALT_ORDER } from '../chem/constants'
+import { ACIDS, IONS, ION_ORDER, SALTS, SALT_ORDER } from '../chem/constants'
 import type { IonId, SaltId } from '../chem/constants'
 import { GYPSUM_CEILING_G_PER_L, solve } from '../solver/solve'
-import type { SaturationWarning, SolveResult } from '../solver/types'
+import type {
+  IonProfile,
+  SaltDose,
+  SaturationWarning,
+  SolveResult,
+} from '../solver/types'
+import {
+  BATH_TEMPERATURE_C,
+  cardAcidity,
+  estimateBathPh,
+  hydroxideReleased,
+  precipitationWarnings,
+} from './chemistry'
+import type { CardAcidityBasis, PrecipitationWarning } from './chemistry'
 import { speciesLabel } from './species'
 import type { NormalizedOnsen, NotReplicated } from './types'
 
@@ -17,9 +34,11 @@ export interface RecipeLine {
   purchaseName: string
   name: string
   formula: string
-  /** Grams for the whole bath. */
+  /** Grams for the whole bath (grams of the product as sold, for a liquid). */
   grams: number
   gramsPerLitre: number
+  /** Volume for the whole bath, for an ingredient sold as a liquid. */
+  millilitres?: number
 }
 
 export interface MatchLine {
@@ -33,6 +52,19 @@ export interface MatchLine {
   diffPct: number | null
 }
 
+export interface AcidReadout {
+  saltId: SaltId
+  /** mmol/L of acid dosed after the fit. */
+  mmolPerL: number
+  /** meq/L of hydroxide the fitted salts release (what the acid cancels). */
+  hydroxideReleased: number
+  /** Free acidity the card reports (meq/L, negative = alkaline) and its basis. */
+  cardAcidity: number
+  cardAcidityBasis: CardAcidityBasis
+  /** Estimated pH the bath would have had without the acid. */
+  phWithoutAcid: number
+}
+
 export interface OnsenReadouts {
   tds: number
   /** meq/L, cation minus anion equivalents, of the RESULT profile. */
@@ -40,12 +72,19 @@ export interface OnsenReadouts {
   /** meq/L charge residual of the card's fitted ions, for comparison. */
   targetChargeResidual: number
   sulfateChlorideRatio: number
-  /** Approximate pH from CO3/HCO3, when both are present in the result. */
-  phEstimate?: number
+  /**
+   * Estimated bath pH from the full proton balance (carbonate, silicate,
+   * water) of the result profile — always present.
+   */
+  phEstimate: number
   /** pH printed on the card, when given. */
   cardPh?: number
   gypsumCeilingHit: boolean
   saturation: SaturationWarning[]
+  /** Hydroxide / silicate precipitation checks at the estimated pH. */
+  precipitation: PrecipitationWarning[]
+  /** Present when acid was dosed to cancel released hydroxide. */
+  acid?: AcidReadout
 }
 
 export interface OnsenResult {
@@ -81,39 +120,93 @@ export const MIN_DOSE_G_PER_L = 0.0005
 /** Ions the card does not list are only shown/warned about above this (mg/L). */
 export const MIN_VISIBLE_MG_PER_L = 0.05
 
+/** The acid the onsen layer neutralises released hydroxide with. */
+export const NEUTRALISING_ACID: SaltId = 'hydrochloricAcid'
+
+/** Recipe lines are printed in this order: the fitted palette, then acids. */
+const RECIPE_ORDER: readonly SaltId[] = [...SALT_ORDER, ...ACIDS]
+
+/**
+ * Fit the card, then dose acid against the hydroxide the fitted salts release.
+ *
+ * The acid is not a fit variable: its amount is fixed by stoichiometry (OH⁻
+ * released + the card's own free acidity), and only its chloride feeds back
+ * into the fit, as if it were already in the source water. Sodium
+ * metasilicate is the sole H2SiO3 source so its dose barely moves when the
+ * chloride credit changes; the loop converges in two or three passes.
+ */
+function fitWithAcid(norm: NormalizedOnsen): {
+  result: SolveResult
+  acidMmolPerL: number
+  hydroxide: number
+} {
+  const clPerMmol = IONS.Cl.molarMass // mg/L of Cl⁻ per mmol/L of HCl
+  const want = cardAcidity(norm).meqPerL
+  let acid = 0
+  let solvedFor = -1
+  let result!: SolveResult
+  let hydroxide = 0
+  for (let i = 0; i < 10 && solvedFor !== acid; i++) {
+    const source: IonProfile =
+      acid > 0
+        ? { ...norm.source, Cl: (norm.source.Cl ?? 0) + acid * clPerMmol }
+        : norm.source
+    result = solve(norm.target, source, SALT_ORDER, norm.batch, {
+      weighting: 'relative',
+    })
+    solvedFor = acid
+    hydroxide = hydroxideReleased(result.dosePerLitre)
+    const next = Math.max(0, hydroxide + want)
+    if (Math.abs(next - acid) > 1e-9) acid = next
+  }
+  return { result, acidMmolPerL: solvedFor, hydroxide }
+}
+
 /** Solve a normalised card with relative weighting over the full palette. */
 export function runOnsen(norm: NormalizedOnsen): OnsenResult {
-  const result: SolveResult = solve(
-    norm.target,
-    norm.source,
-    SALT_ORDER,
-    norm.batch,
-    { weighting: 'relative' },
-  )
+  const { result, acidMmolPerL, hydroxide } = fitWithAcid(norm)
+  const acidity = cardAcidity(norm)
 
   const litres =
     norm.batch.unit === 'gal'
       ? norm.batch.volume * LITRES_PER_US_GALLON
       : norm.batch.volume
 
-  const recipe: RecipeLine[] = SALT_ORDER.filter(
-    (id) => (result.dosePerLitre[id] ?? 0) >= MIN_DOSE_G_PER_L,
-  ).map((id) => ({
-    saltId: id,
-    purchaseName: SALTS[id].purchaseName,
-    name: SALTS[id].name,
-    formula: SALTS[id].formula,
-    grams: result.recipe[id] ?? 0,
-    gramsPerLitre: result.dosePerLitre[id] ?? 0,
-  }))
+  // Doses: the fitted salts plus the acid (grams of the retail solution).
+  const dosePerLitre: SaltDose = { ...result.dosePerLitre }
+  if (acidMmolPerL > 0) {
+    dosePerLitre[NEUTRALISING_ACID] =
+      (acidMmolPerL / 1000) * SALTS[NEUTRALISING_ACID].molarMass
+  }
+
+  const recipe: RecipeLine[] = RECIPE_ORDER.filter(
+    (id) => (dosePerLitre[id] ?? 0) >= MIN_DOSE_G_PER_L,
+  ).map((id) => {
+    const perL = dosePerLitre[id] ?? 0
+    const line: RecipeLine = {
+      saltId: id,
+      purchaseName: SALTS[id].purchaseName,
+      name: SALTS[id].name,
+      formula: SALTS[id].formula,
+      grams: perL * litres,
+      gramsPerLitre: perL,
+    }
+    const density = SALTS[id].densityGPerMl
+    if (density !== undefined) line.millilitres = (perL * litres) / density
+    return line
+  })
+
+  // The result profile already carries the acid's chloride (credited to the
+  // source water during the fit).
+  const profile = result.resultProfile
 
   const match: MatchLine[] = ION_ORDER.filter(
     (ion) =>
       (norm.target[ion] ?? 0) !== 0 ||
-      (result.resultProfile[ion] ?? 0) >= MIN_VISIBLE_MG_PER_L,
+      (profile[ion] ?? 0) >= MIN_VISIBLE_MG_PER_L,
   ).map((ion) => {
     const target = norm.target[ion] ?? 0
-    const res = result.resultProfile[ion] ?? 0
+    const res = profile[ion] ?? 0
     return {
       ion,
       label: speciesLabel(ion),
@@ -126,18 +219,34 @@ export function runOnsen(norm: NormalizedOnsen): OnsenResult {
   const gypsumCeilingHit =
     (result.dosePerLitre.gypsum ?? 0) >= GYPSUM_CEILING_G_PER_L
 
+  const phEstimate = estimateBathPh(profile)
+  const precipitation = precipitationWarnings(profile, phEstimate)
+
   const readouts: OnsenReadouts = {
     tds: result.readouts.tds,
     chargeResidual: result.readouts.chargeResidual,
     targetChargeResidual: chargeResidualOf(norm.target),
     sulfateChlorideRatio: result.readouts.sulfateChlorideRatio,
+    phEstimate,
     gypsumCeilingHit,
     saturation: result.warnings,
-  }
-  if (result.readouts.phEstimate !== undefined) {
-    readouts.phEstimate = result.readouts.phEstimate
+    precipitation,
   }
   if (norm.ph !== undefined) readouts.cardPh = norm.ph
+  if (acidMmolPerL > 0) {
+    const withoutAcid: IonProfile = {
+      ...profile,
+      Cl: (profile.Cl ?? 0) - acidMmolPerL * IONS.Cl.molarMass,
+    }
+    readouts.acid = {
+      saltId: NEUTRALISING_ACID,
+      mmolPerL: acidMmolPerL,
+      hydroxideReleased: hydroxide,
+      cardAcidity: acidity.meqPerL,
+      cardAcidityBasis: acidity.basis,
+      phWithoutAcid: estimateBathPh(withoutAcid),
+    }
+  }
 
   const warnings: string[] = []
   for (const w of result.warnings) {
@@ -169,21 +278,50 @@ export function runOnsen(norm: NormalizedOnsen): OnsenResult {
       )
     }
   }
+  if (readouts.acid) {
+    const a = readouts.acid
+    const acidClMg = a.mmolPerL * IONS.Cl.molarMass
+    if (acidClMg > (norm.target.Cl ?? 0)) {
+      warnings.push(
+        `The acid's chloride alone (${acidClMg.toFixed(0)} mg/L) exceeds the card's ${(norm.target.Cl ?? 0).toFixed(0)} mg/L; a different acid would be needed to avoid overshooting chloride.`,
+      )
+    }
+    const cardPart =
+      a.cardAcidity !== 0
+        ? ` and sets the card's ${Math.abs(a.cardAcidity).toFixed(2)} meq/L free ${a.cardAcidity > 0 ? 'acidity' : 'alkalinity'} (${a.cardAcidityBasis})`
+        : ''
+    warnings.push(
+      `Hydroxide: sodium metasilicate releases ${a.hydroxideReleased.toFixed(2)} meq/L OH⁻ (2 per Na₂SiO₃); ${a.mmolPerL.toFixed(2)} mmol/L HCl cancels it${cardPart}. Without the acid the bath would sit near pH ${a.phWithoutAcid.toFixed(1)}.`,
+    )
+  }
   warnings.push(
-    `Charge residual of the result: ${readouts.chargeResidual.toFixed(2)} meq/L (card's fitted ions: ${readouts.targetChargeResidual.toFixed(2)} meq/L).` +
-      (recipe.some((r) => r.saltId === 'sodiumMetasilicate')
-        ? ' Sodium metasilicate contributes hydroxide, which is not modelled, so a positive residual here is expected.'
-        : ''),
+    `Charge residual of the result: ${readouts.chargeResidual.toFixed(2)} meq/L (card's fitted ions: ${readouts.targetChargeResidual.toFixed(2)} meq/L).`,
   )
-  if (readouts.phEstimate !== undefined) {
+  {
     const card =
       readouts.cardPh !== undefined ? ` Card pH: ${readouts.cardPh}.` : ''
     warnings.push(
-      `Approximate pH ≈ ${readouts.phEstimate.toFixed(1)} from the CO₃²⁻/HCO₃⁻ ratio (pKa₂ 10.33, no activity correction — rough guide only).${card}`,
+      `Approximate pH ≈ ${phEstimate.toFixed(1)} from the proton balance of the result (carbonate pKa 6.35/10.33, silicic acid pKa 9.84/13.2, 25 °C, no activity correction — rough guide only).${card}`,
     )
-  } else if (readouts.cardPh !== undefined) {
+    if (
+      readouts.cardPh !== undefined &&
+      Math.abs(phEstimate - readouts.cardPh) > 0.5
+    ) {
+      warnings.push(
+        `Estimated pH is ${Math.abs(phEstimate - readouts.cardPh).toFixed(1)} units from the card's: the recipe only cancels hydroxide the salts release and sets the card's free acidity, it does not fit pH (unfitted buffers such as free CO₂ set the rest).`,
+      )
+    }
+  }
+  for (const p of precipitation) warnings.push(p.message)
+  if (readouts.acid) {
+    const line = recipe.find((r) => r.saltId === NEUTRALISING_ACID)
+    if (line?.millilitres !== undefined) {
+      warnings.push(
+        `Muriatic acid: ${line.grams.toFixed(0)} g ≈ ${line.millilitres.toFixed(0)} mL of 31.45% HCl (20° Baumé hardware-store grade, 1.16 g/mL). A 20% jug needs 1.57× the volume. Gloves and eye protection; add the acid to the bath water, never water to acid; never mix it with the metasilicate concentrate.`,
+      )
+    }
     warnings.push(
-      `Card pH: ${readouts.cardPh}. No pH estimate — it needs both HCO₃⁻ and CO₃²⁻ in the result.`,
+      `Order of addition: fill the tub, stir in the acid, dissolve the other salts, then dissolve the sodium metasilicate in a bucket of warm water and pour it in slowly while stirring. Silica gels fastest around pH 7–9 and slowest near pH 3–4, so the bath must already be acidic when the silicate goes in. Bath assumed at ${BATH_TEMPERATURE_C} °C for the silica check.`,
     )
   }
   const excluded = norm.notReplicated.filter(
@@ -239,6 +377,16 @@ function reasonText(n: NotReplicated): string {
   }
 }
 
+/** One line per liquid ingredient: grams as poured and the matching volume. */
+export function liquidLines(r: OnsenResult): string[] {
+  return r.recipe
+    .filter((x) => x.millilitres !== undefined)
+    .map(
+      (x) =>
+        `Liquid: ${x.purchaseName}: ${fmt(x.grams, 1)} g ≈ ${fmt(x.millilitres!, 0)} mL (${SALTS[x.saltId].densityGPerMl} g/mL).`,
+    )
+}
+
 /** Render an `OnsenResult` as the Markdown report the CLI prints. */
 export function renderMarkdown(r: OnsenResult): string {
   const lines: string[] = []
@@ -268,6 +416,11 @@ export function renderMarkdown(r: OnsenResult): string {
         `| ${line.purchaseName} | ${line.formula} | ${fmt(line.grams, 1)} | ${fmt(line.gramsPerLitre, 3)} |`,
       )
     }
+    const liquids = liquidLines(r)
+    if (liquids.length) {
+      lines.push('')
+      for (const l of liquids) lines.push(l)
+    }
   }
   lines.push('')
 
@@ -286,7 +439,7 @@ export function renderMarkdown(r: OnsenResult): string {
   }
   lines.push('')
   lines.push(
-    `TDS of result: ${fmt(r.readouts.tds, 0)} mg/L. Sulfate:chloride ${isFinite(r.readouts.sulfateChlorideRatio) ? fmt(r.readouts.sulfateChlorideRatio, 2) : '∞'}.`,
+    `TDS of result: ${fmt(r.readouts.tds, 0)} mg/L. Sulfate:chloride ${isFinite(r.readouts.sulfateChlorideRatio) ? fmt(r.readouts.sulfateChlorideRatio, 2) : '∞'}. Estimated pH ${fmt(r.readouts.phEstimate, 1)}${r.readouts.cardPh !== undefined ? ` (card ${r.readouts.cardPh})` : ''}.`,
   )
   lines.push('')
 

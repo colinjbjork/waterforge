@@ -61,12 +61,12 @@ describe('salt charge balance', () => {
   // A dissolved salt is electrically neutral: the signed charges of the ions it
   // releases must sum to zero. This invariant guards every salt's stoichiometry
   // — e.g. it catches modelling CaCO3 as Ca + 1 HCO3 rather than Ca + 2 HCO3.
-  // The onsen fork's sodium metasilicate is the one declared exception: its
-  // silicate is carried as neutral H2SiO3 and the balancing hydroxide is not a
-  // modelled ion, so the salt declares `netCharge: +2` and the residual shows
-  // in the charge readout instead. Every other salt must still be zero.
+  // The onsen fork's sodium metasilicate and hydrochloric acid are the
+  // declared exceptions: the counter-ion is water's own (OH⁻ or H⁺), which is
+  // not a modelled ion, so they declare `netCharge` (+2 and −1) and the onsen
+  // layer accounts for it. Every other salt must still be zero.
   it('every salt releases ions that sum to its declared net charge (zero unless stated)', () => {
-    for (const id of SALT_ORDER) {
+    for (const id of Object.keys(SALTS) as (keyof typeof SALTS)[]) {
       let charge = 0
       for (const [ion, moles] of Object.entries(SALTS[id].stoichiometry)) {
         charge += IONS[ion as keyof typeof IONS].charge * (moles ?? 0)
@@ -77,9 +77,14 @@ describe('salt charge balance', () => {
     }
   })
 
-  it('only sodium metasilicate declares a net charge', () => {
-    const declared = SALT_ORDER.filter((id) => SALTS[id].netCharge)
-    expect(declared).toEqual(['sodiumMetasilicate'])
+  it('only sodium metasilicate (in the palette) and the acid declare a net charge', () => {
+    const inPalette = SALT_ORDER.filter((id) => SALTS[id].netCharge)
+    expect(inPalette).toEqual(['sodiumMetasilicate'])
     expect(SALTS.sodiumMetasilicate.netCharge).toBe(+2)
+    const all = (Object.keys(SALTS) as (keyof typeof SALTS)[]).filter(
+      (id) => SALTS[id].netCharge,
+    )
+    expect(all.sort()).toEqual(['hydrochloricAcid', 'sodiumMetasilicate'])
+    expect(SALTS.hydrochloricAcid.netCharge).toBe(-1)
   })
 })

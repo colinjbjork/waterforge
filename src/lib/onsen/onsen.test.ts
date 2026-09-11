@@ -12,7 +12,7 @@ import {
   validateOnsenInput,
 } from './index'
 import type { OnsenInput } from './index'
-import { IONS, SALT_ORDER, SALTS } from '../chem'
+import { IONS, SALTS } from '../chem'
 import { forward } from '../solver/matrix'
 import { LITRES_PER_US_GALLON } from '../chem/conversions'
 
@@ -275,8 +275,8 @@ describe('exclusions: sulfur and iron', () => {
     ).toBe('no-ingredient')
   })
 
-  it('no salt in the palette contains reduced sulfur or iron', () => {
-    for (const id of SALT_ORDER) {
+  it('no salt or acid contains reduced sulfur or iron', () => {
+    for (const id of Object.keys(SALTS) as (keyof typeof SALTS)[]) {
       const salt = SALTS[id]
       for (const key of Object.keys(salt.stoichiometry)) {
         expect(EXCLUDED_KEYS, `${id} releases ${key}`).not.toContain(key)
@@ -307,10 +307,26 @@ describe('alkaline card: sodium carbonate + baking soda', () => {
       'sodiumCarbonate',
     ])
     expect(r.readouts.phEstimate).toBeDefined()
+    // No silicate on the card → no hydroxide to cancel → no acid line.
+    expect(r.readouts.acid).toBeUndefined()
     expect(r.readouts.cardPh).toBe(9.5)
     const md = renderMarkdown(r)
     expect(md).toMatch(/Approximate pH ≈ \d+\.\d/)
     expect(md).toContain('Card pH: 9.5')
+  })
+})
+
+describe('the documented example: silicate card gets its acid', () => {
+  it('doses muriatic acid for the metasilicate and reports the pH', () => {
+    const r = runOnsen(normalizeOnsen(EXAMPLE))
+    expect(r.recipe.map((x) => x.saltId)).toContain('sodiumMetasilicate')
+    expect(r.recipe.map((x) => x.saltId)).toContain('hydrochloricAcid')
+    expect(r.readouts.acid?.hydroxideReleased).toBeGreaterThan(0)
+    expect(r.readouts.phEstimate).toBeGreaterThan(7)
+    expect(r.readouts.phEstimate).toBeLessThan(10)
+    const md = renderMarkdown(r)
+    expect(md).toContain('Liquid: muriatic acid')
+    expect(md).toContain('Hydroxide: sodium metasilicate releases')
   })
 })
 

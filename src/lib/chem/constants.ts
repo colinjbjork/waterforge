@@ -33,6 +33,8 @@ export type SaltId =
   | 'sodiumSulfate'
   | 'potassiumChloride'
   | 'sodiumMetasilicate'
+  // Bath-only acid (never in SALT_ORDER; see `ACIDS`).
+  | 'hydrochloricAcid'
 
 // Atomic / elemental weights (g/mol). Standard atomic weights at the precision
 // the source method uses; group weights below are summed from these.
@@ -74,6 +76,16 @@ export const NA2SIO3_5H2O_WEIGHT =
   ATOMIC_WEIGHTS.Si +
   3 * ATOMIC_WEIGHTS.O +
   5 * H2O_WEIGHT // 212.137
+export const HCL_WEIGHT = ATOMIC_WEIGHTS.H + ATOMIC_WEIGHTS.Cl // 36.458
+
+// Hardware-store muriatic acid is sold as a 31.45 % w/w HCl solution
+// (20° Baumé, density 1.16 g/mL). The acid "salt" below is defined as that
+// product, so its dose comes out in grams of the jug's contents — the same
+// device as counting water of hydration in a hydrate's molar mass.
+export const MURIATIC_ACID_MASS_FRACTION = 0.3145
+export const MURIATIC_ACID_DENSITY_G_PER_ML = 1.16
+/** Grams of 31.45 % muriatic acid that carry one mole of HCl. */
+export const MURIATIC_ACID_WEIGHT = HCL_WEIGHT / MURIATIC_ACID_MASS_FRACTION // 115.9
 
 /** Molar mass of CaCO3, the reference compound for alkalinity expressed as-CaCO3. */
 export const CACO3_MOLAR_MASS = CACO3_WEIGHT
@@ -136,11 +148,20 @@ export interface Salt {
   /**
    * Net charge (per mole of salt) of the ions the model tracks, when the salt
    * is deliberately NOT charge-balanced in the model. Omitted (zero) for every
-   * ordinary salt. Sodium metasilicate is the one exception: it is modelled as
-   * 2 Na+ plus neutral H2SiO3, so the +2 the hydroxide would balance is left
-   * visible in the charge-residual readout instead of being modelled.
+   * ordinary salt. The counter-charge is water's own ion: a positive value is
+   * the number of hydroxide ions (OH⁻) the salt releases per mole, a negative
+   * value the number of hydrogen ions (H⁺). Sodium metasilicate is +2 (2 Na⁺
+   * plus neutral H2SiO3 plus 2 OH⁻); hydrochloric acid is −1 (Cl⁻ plus H⁺).
+   * The onsen layer (`src/lib/onsen/chemistry.ts`) reads this to dose acid
+   * against released hydroxide and to estimate the bath pH; the solver itself
+   * leaves it visible in the charge-residual readout.
    */
   readonly netCharge?: number
+  /**
+   * Density in g/mL for an ingredient sold as a liquid, so the report can
+   * print a volume next to the gram dose. Omitted for solids.
+   */
+  readonly densityGPerMl?: number
 }
 
 export const SALTS: Record<SaltId, Salt> = {
@@ -280,7 +301,32 @@ export const SALTS: Record<SaltId, Salt> = {
     stoichiometry: { Na: 2, H2SiO3: 1 },
     netCharge: +2,
   },
+
+  // --- Bath-only acid ------------------------------------------------------
+  // NOT in SALT_ORDER: the least-squares fit never reaches for it and the
+  // drinking-water app never lists it. The onsen layer doses it after the fit,
+  // stoichiometrically, to cancel the hydroxide sodium metasilicate releases
+  // (see src/lib/onsen/chemistry.ts). Defined as the retail 31.45 % solution
+  // so the gram dose is grams of muriatic acid as poured.
+  hydrochloricAcid: {
+    id: 'hydrochloricAcid',
+    purchaseName: 'muriatic acid (31.45% hydrochloric acid, hardware store)',
+    name: 'Hydrochloric acid, 31.45% solution',
+    formula: 'HCl (31.45% aq)',
+    molarMass: MURIATIC_ACID_WEIGHT,
+    // Cl⁻ plus one H⁺ per mole; the H⁺ is water's ion, declared as −1.
+    stoichiometry: { Cl: 1 },
+    netCharge: -1,
+    densityGPerMl: MURIATIC_ACID_DENSITY_G_PER_ML,
+  },
 }
+
+/**
+ * Acids the onsen layer may dose after the fit. Deliberately NOT part of
+ * SALT_ORDER, so neither the solver's recipe policy (ADR 0009) nor the
+ * drinking-water UI ever sees them.
+ */
+export const ACIDS: readonly SaltId[] = ['hydrochloricAcid']
 
 /** Stable iteration order for salts (the source method's dosing priority). */
 export const SALT_ORDER: readonly SaltId[] = [

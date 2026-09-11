@@ -5,6 +5,7 @@
 // grid — instead of a markdown pipe table, which is unreadable un-rendered.
 
 import { speciesLabel } from './species'
+import { liquidLines } from './report'
 import type { OnsenResult } from './report'
 import type { NotReplicated } from './types'
 
@@ -103,6 +104,7 @@ export function renderText(r: OnsenResult): string {
         ['left', 'left', 'right', 'right'],
       ),
     )
+    for (const l of liquidLines(r)) lines.push(l)
   }
   lines.push('')
 
@@ -122,7 +124,7 @@ export function renderText(r: OnsenResult): string {
     ),
   )
   lines.push(
-    `TDS of result ${fmt(r.readouts.tds, 0)} mg/L. Sulfate:chloride ${isFinite(r.readouts.sulfateChlorideRatio) ? fmt(r.readouts.sulfateChlorideRatio, 2) : 'infinite'}.`,
+    `TDS of result ${fmt(r.readouts.tds, 0)} mg/L. Sulfate:chloride ${isFinite(r.readouts.sulfateChlorideRatio) ? fmt(r.readouts.sulfateChlorideRatio, 2) : 'infinite'}. Estimated pH ${fmt(r.readouts.phEstimate, 1)}${r.readouts.cardPh !== undefined ? ` (card ${r.readouts.cardPh})` : ''}.`,
   )
   lines.push('')
 
