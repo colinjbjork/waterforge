@@ -1,7 +1,7 @@
 // Run the solver on a normalised onsen card and render the result.
 //
 // The fit uses `'relative'` weighting (each ion row scaled by 1/max(target, 1))
-// over the FULL salt palette, so a 6 mg/L carbonate figure matters as much as
+// over the on-hand onsen palette (ONSEN_PALETTE), so a 6 mg/L carbonate figure matters as much as
 // an 820 mg/L sodium figure. After the fit, the hydroxide the salts release
 // (sodium metasilicate: 2 OH⁻ per mole) is cancelled stoichiometrically with
 // hydrochloric acid, the acid's chloride is credited back to the fit, and the
@@ -9,7 +9,7 @@
 // `chemistry.ts`. Output is a plain data object (for `--json`) plus a
 // Markdown renderer.
 
-import { ACIDS, IONS, ION_ORDER, SALTS, SALT_ORDER } from '../chem/constants'
+import { ACIDS, IONS, ION_ORDER, ONSEN_PALETTE, SALTS } from '../chem/constants'
 import type { IonId, SaltId } from '../chem/constants'
 import { GYPSUM_CEILING_G_PER_L, solve } from '../solver/solve'
 import type {
@@ -124,7 +124,7 @@ export const MIN_VISIBLE_MG_PER_L = 0.05
 export const NEUTRALISING_ACID: SaltId = 'hydrochloricAcid'
 
 /** Recipe lines are printed in this order: the fitted palette, then acids. */
-const RECIPE_ORDER: readonly SaltId[] = [...SALT_ORDER, ...ACIDS]
+const RECIPE_ORDER: readonly SaltId[] = [...ONSEN_PALETTE, ...ACIDS]
 
 /**
  * Fit the card, then dose acid against the hydroxide the fitted salts release.
@@ -151,7 +151,7 @@ function fitWithAcid(norm: NormalizedOnsen): {
       acid > 0
         ? { ...norm.source, Cl: (norm.source.Cl ?? 0) + acid * clPerMmol }
         : norm.source
-    result = solve(norm.target, source, SALT_ORDER, norm.batch, {
+    result = solve(norm.target, source, ONSEN_PALETTE, norm.batch, {
       weighting: 'relative',
     })
     solvedFor = acid
@@ -162,7 +162,7 @@ function fitWithAcid(norm: NormalizedOnsen): {
   return { result, acidMmolPerL: solvedFor, hydroxide }
 }
 
-/** Solve a normalised card with relative weighting over the full palette. */
+/** Solve a normalised card with relative weighting over the on-hand onsen palette. */
 export function runOnsen(norm: NormalizedOnsen): OnsenResult {
   const { result, acidMmolPerL, hydroxide } = fitWithAcid(norm)
   const acidity = cardAcidity(norm)
@@ -317,7 +317,7 @@ export function runOnsen(norm: NormalizedOnsen): OnsenResult {
     const line = recipe.find((r) => r.saltId === NEUTRALISING_ACID)
     if (line?.millilitres !== undefined) {
       warnings.push(
-        `Muriatic acid: ${line.grams.toFixed(0)} g ≈ ${line.millilitres.toFixed(0)} mL of 31.45% HCl (20° Baumé hardware-store grade, 1.16 g/mL). A 20% jug needs 1.57× the volume. Gloves and eye protection; add the acid to the bath water, never water to acid; never mix it with the metasilicate concentrate.`,
+        `Muriatic acid: ${line.grams.toFixed(0)} g ≈ ${line.millilitres.toFixed(0)} mL of 14.5% HCl (half-strength hardware-store grade, ≈1.07 g/mL). A full-strength 31.45% jug needs only 0.43× the volume. Gloves and eye protection; add the acid to the bath water, never water to acid; never mix it with the metasilicate concentrate.`,
       )
     }
     warnings.push(

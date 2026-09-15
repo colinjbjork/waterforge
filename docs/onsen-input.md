@@ -125,7 +125,7 @@ So after the fit the CLI:
    mmol/L; only sodium metasilicate has one, +2).
 2. Reads the free acidity the card itself reports — its `H` (hydrogen-ion) and
    `OH` rows if present, else its `ph`, else zero.
-3. Doses **muriatic acid** (31.45 % hydrochloric acid, hardware-store grade;
+3. Doses **muriatic acid** (14.5 % hydrochloric acid, the half-strength hardware-store grade on hand;
    the salt id is `hydrochloricAcid`, defined as the retail solution so the
    dose is grams as poured, with the volume printed next to it) equal to the
    released hydroxide plus the card acidity, then re-runs the fit with that
@@ -202,10 +202,17 @@ cardAcidity, cardAcidityBasis, phWithoutAcid }`) and `warnings[]`.
   in the least-squares system is scaled by 1 / max(target mg/L, 1), so a 6 mg/L
   carbonate figure counts as much as a 1150 mg/L chloride figure in percentage
   terms. The default `'absolute'` weighting (upstream behaviour) is untouched.
-- The **full salt palette** is offered. Recipe selection keeps upstream's
-  policy (ADR 0009): best fit first, then the highest-priority minimal salt
-  set. The six fork salts sit at the end of the priority order, so upstream
-  drinking-water recipes are unchanged.
+- The **on-hand onsen palette** (`ONSEN_PALETTE` in `constants.ts`) is
+  offered, not the full `SALT_ORDER`: gypsum, Epsom salt, table salt,
+  calcium chloride dihydrate, baking soda, chalk, magnesium chloride,
+  potassium bicarbonate, washing soda (sodium carbonate decahydrate),
+  Glauber's salt (sodium sulfate decahydrate), potassium chloride and sodium
+  metasilicate. Anhydrous calcium chloride, anhydrous soda ash and anhydrous
+  sodium sulfate are defined for the drinking-water app but never dosed
+  here — edit the list when the shelf changes. Recipe selection keeps
+  upstream's policy (ADR 0009): best fit first, then the highest-priority
+  minimal salt set. The six fork salts sit at the end of `SALT_ORDER`, so
+  upstream drinking-water recipes are unchanged.
 - **Best fit, no tolerance.** Most cards cannot be hit exactly (charge
   balance of the card, source water above target, gypsum's 2 g/L solubility
   ceiling); the Match table and Warnings show where the recipe lands.
@@ -221,8 +228,9 @@ cardAcidity, cardAcidityBasis, phWithoutAcid }`) and `warnings[]`.
   (Na₂SO₄), `potassiumChloride` (KCl), `sodiumMetasilicate` (Na₂SiO₃·5H₂O),
   all with molar masses summed from atomic weights; `purchaseName` on every
   salt; `netCharge` = water's counter-ion per mole (+2 OH⁻ on sodium
-  metasilicate, −1 H⁺ on hydrochloric acid); `hydrochloricAcid` (31.45 %
-  muriatic acid, `densityGPerMl`) in `ACIDS`, outside `SALT_ORDER`.
+  metasilicate, −1 H⁺ on hydrochloric acid); `hydrochloricAcid` (14.5 %
+  muriatic acid, `densityGPerMl`) in `ACIDS`, outside `SALT_ORDER`;
+  `ONSEN_PALETTE`, the on-hand subset the onsen layer fits over.
 - `src/lib/solver/solve.ts` — fifth `solve()` argument `{ weighting }`;
   `estimatePh()`; `Readouts.phEstimate`.
 - `src/lib/solver/oracle.ts` — driver ions for the new salts.

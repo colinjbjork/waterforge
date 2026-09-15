@@ -78,14 +78,17 @@ export const NA2SIO3_5H2O_WEIGHT =
   5 * H2O_WEIGHT // 212.137
 export const HCL_WEIGHT = ATOMIC_WEIGHTS.H + ATOMIC_WEIGHTS.Cl // 36.458
 
-// Hardware-store muriatic acid is sold as a 31.45 % w/w HCl solution
-// (20° Baumé, density 1.16 g/mL). The acid "salt" below is defined as that
-// product, so its dose comes out in grams of the jug's contents — the same
-// device as counting water of hydration in a hydrate's molar mass.
-export const MURIATIC_ACID_MASS_FRACTION = 0.3145
-export const MURIATIC_ACID_DENSITY_G_PER_ML = 1.16
-/** Grams of 31.45 % muriatic acid that carry one mole of HCl. */
-export const MURIATIC_ACID_WEIGHT = HCL_WEIGHT / MURIATIC_ACID_MASS_FRACTION // 115.9
+// The muriatic acid on hand is a 14.5 % w/w HCl solution (the "safer" /
+// half-strength retail grade; density ≈ 1.07 g/mL at 20 °C, interpolated
+// from the 14 % → 1.069 and 16 % → 1.079 HCl density tables). The acid
+// "salt" below is defined as that product, so its dose comes out in grams
+// of the jug's contents — the same device as counting water of hydration in
+// a hydrate's molar mass. Full-strength 31.45 % (20° Baumé) jugs need 0.43×
+// the volume; change these two constants if the jug changes.
+export const MURIATIC_ACID_MASS_FRACTION = 0.145
+export const MURIATIC_ACID_DENSITY_G_PER_ML = 1.07
+/** Grams of 14.5 % muriatic acid that carry one mole of HCl. */
+export const MURIATIC_ACID_WEIGHT = HCL_WEIGHT / MURIATIC_ACID_MASS_FRACTION // 251.4
 
 /** Molar mass of CaCO3, the reference compound for alkalinity expressed as-CaCO3. */
 export const CACO3_MOLAR_MASS = CACO3_WEIGHT
@@ -306,13 +309,13 @@ export const SALTS: Record<SaltId, Salt> = {
   // NOT in SALT_ORDER: the least-squares fit never reaches for it and the
   // drinking-water app never lists it. The onsen layer doses it after the fit,
   // stoichiometrically, to cancel the hydroxide sodium metasilicate releases
-  // (see src/lib/onsen/chemistry.ts). Defined as the retail 31.45 % solution
+  // (see src/lib/onsen/chemistry.ts). Defined as the retail 14.5 % solution
   // so the gram dose is grams of muriatic acid as poured.
   hydrochloricAcid: {
     id: 'hydrochloricAcid',
-    purchaseName: 'muriatic acid (31.45% hydrochloric acid, hardware store)',
-    name: 'Hydrochloric acid, 31.45% solution',
-    formula: 'HCl (31.45% aq)',
+    purchaseName: 'muriatic acid (14.5% hydrochloric acid, hardware store)',
+    name: 'Hydrochloric acid, 14.5% solution',
+    formula: 'HCl (14.5% aq)',
     molarMass: MURIATIC_ACID_WEIGHT,
     // Cl⁻ plus one H⁺ per mole; the H⁺ is water's ion, declared as −1.
     stoichiometry: { Cl: 1 },
@@ -344,6 +347,33 @@ export const SALT_ORDER: readonly SaltId[] = [
   'sodiumCarbonateDecahydrate',
   'sodiumSulfateDecahydrate',
   'sodiumSulfate',
+  'potassiumChloride',
+  'sodiumMetasilicate',
+]
+
+/**
+ * The salts actually on the shelf for onsen baths — the onsen layer fits
+ * over THIS list, not SALT_ORDER, so a recipe never calls for a jar that
+ * isn't there. Inventory as stated 2026-09-15: calcium sulfate (gypsum),
+ * Epsom salt, table salt, calcium chloride (dihydrate), sodium bicarbonate,
+ * calcium carbonate, magnesium chloride, potassium bicarbonate, washing soda
+ * (sodium carbonate decahydrate), Glauber's salt (sodium sulfate
+ * decahydrate), potassium chloride, sodium metasilicate, plus muriatic acid
+ * (14.5 %, in `ACIDS`). Deliberately absent: anhydrous calcium chloride,
+ * anhydrous soda ash and anhydrous sodium sulfate. Order = fit priority,
+ * same convention as SALT_ORDER.
+ */
+export const ONSEN_PALETTE: readonly SaltId[] = [
+  'gypsum',
+  'epsom',
+  'tableSalt',
+  'calciumChloride',
+  'bakingSoda',
+  'chalk',
+  'magnesiumChloride',
+  'potassiumBicarbonate',
+  'sodiumCarbonateDecahydrate',
+  'sodiumSulfateDecahydrate',
   'potassiumChloride',
   'sodiumMetasilicate',
 ]

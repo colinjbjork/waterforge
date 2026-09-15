@@ -304,7 +304,7 @@ describe('alkaline card: sodium carbonate + baking soda', () => {
     expect(co3.result).toBeCloseTo(profile.CO3!, 6)
     expect(r.recipe.map((x) => x.saltId).sort()).toEqual([
       'bakingSoda',
-      'sodiumCarbonate',
+      'sodiumCarbonateDecahydrate',
     ])
     expect(r.readouts.phEstimate).toBeDefined()
     // No silicate on the card → no hydroxide to cancel → no acid line.

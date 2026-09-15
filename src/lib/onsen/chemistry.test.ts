@@ -12,7 +12,13 @@ import {
 } from './chemistry'
 import { normalizeOnsen } from './normalize'
 import { renderText, runOnsen } from './index'
-import { ACIDS, IONS, SALT_ORDER, SALTS } from '../chem'
+import {
+  ACIDS,
+  IONS,
+  MURIATIC_ACID_DENSITY_G_PER_ML,
+  SALT_ORDER,
+  SALTS,
+} from '../chem'
 import { forward } from '../solver/matrix'
 import type { IonProfile } from '../solver/types'
 
@@ -120,8 +126,8 @@ describe('hydroxide and acid from doses', () => {
       expect(SALTS[id].netCharge).toBeLessThan(0)
       expect(SALTS[id].densityGPerMl).toBeGreaterThan(0)
     }
-    // 31.45 % w/w: one mole of HCl (36.46 g) in 115.9 g of solution.
-    expect(SALTS.hydrochloricAcid.molarMass).toBeCloseTo(36.458 / 0.3145, 2)
+    // 14.5 % w/w: one mole of HCl (36.46 g) in 251.4 g of solution.
+    expect(SALTS.hydrochloricAcid.molarMass).toBeCloseTo(36.458 / 0.145, 2)
   })
 })
 
@@ -215,7 +221,10 @@ describe('report: acid dosing end to end', () => {
   it('adds muriatic acid to cancel the metasilicate hydroxide plus the card acidity', () => {
     const acid = r.recipe.find((x) => x.saltId === 'hydrochloricAcid')!
     expect(acid).toBeDefined()
-    expect(acid.millilitres).toBeCloseTo(acid.grams / 1.16, 6)
+    expect(acid.millilitres).toBeCloseTo(
+      acid.grams / MURIATIC_ACID_DENSITY_G_PER_ML,
+      6,
+    )
     expect(r.readouts.acid).toBeDefined()
     const a = r.readouts.acid!
     expect(a.mmolPerL).toBeCloseTo(a.hydroxideReleased + 0.1 / 1.008, 6)
