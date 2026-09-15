@@ -252,7 +252,7 @@ export const SALTS: Record<SaltId, Salt> = {
   // never reaches for them unless they lower the residual.
   sodiumCarbonate: {
     id: 'sodiumCarbonate',
-    purchaseName: 'soda ash / pool pH increaser',
+    purchaseName: 'washing soda (Arm & Hammer, anhydrous sodium carbonate) / soda ash',
     name: 'Sodium carbonate (anhydrous)',
     formula: 'Na2CO3',
     molarMass: NA2CO3_WEIGHT,
@@ -356,12 +356,13 @@ export const SALT_ORDER: readonly SaltId[] = [
  * over THIS list, not SALT_ORDER, so a recipe never calls for a jar that
  * isn't there. Inventory as stated 2026-09-15: calcium sulfate (gypsum),
  * Epsom salt, table salt, calcium chloride (dihydrate), sodium bicarbonate,
- * calcium carbonate, magnesium chloride, potassium bicarbonate, washing soda
- * (sodium carbonate decahydrate), Glauber's salt (sodium sulfate
- * decahydrate), potassium chloride, sodium metasilicate, plus muriatic acid
- * (14.5 %, in `ACIDS`). Deliberately absent: anhydrous calcium chloride,
- * anhydrous soda ash and anhydrous sodium sulfate. Order = fit priority,
- * same convention as SALT_ORDER.
+ * calcium carbonate, magnesium chloride, potassium bicarbonate, Arm & Hammer
+ * washing soda (ANHYDROUS sodium carbonate — the retail box is not the
+ * decahydrate), Glauber's salt (sodium sulfate decahydrate), potassium
+ * chloride, sodium metasilicate, plus muriatic acid (14.5 %, in `ACIDS`).
+ * Deliberately absent: anhydrous calcium chloride, sodium carbonate
+ * decahydrate and anhydrous sodium sulfate. Order = fit priority, same
+ * convention as SALT_ORDER.
  */
 export const ONSEN_PALETTE: readonly SaltId[] = [
   'gypsum',
@@ -372,7 +373,7 @@ export const ONSEN_PALETTE: readonly SaltId[] = [
   'chalk',
   'magnesiumChloride',
   'potassiumBicarbonate',
-  'sodiumCarbonateDecahydrate',
+  'sodiumCarbonate',
   'sodiumSulfateDecahydrate',
   'potassiumChloride',
   'sodiumMetasilicate',

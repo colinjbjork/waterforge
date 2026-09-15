@@ -205,10 +205,10 @@ cardAcidity, cardAcidityBasis, phWithoutAcid }`) and `warnings[]`.
 - The **on-hand onsen palette** (`ONSEN_PALETTE` in `constants.ts`) is
   offered, not the full `SALT_ORDER`: gypsum, Epsom salt, table salt,
   calcium chloride dihydrate, baking soda, chalk, magnesium chloride,
-  potassium bicarbonate, washing soda (sodium carbonate decahydrate),
-  Glauber's salt (sodium sulfate decahydrate), potassium chloride and sodium
-  metasilicate. Anhydrous calcium chloride, anhydrous soda ash and anhydrous
-  sodium sulfate are defined for the drinking-water app but never dosed
+  potassium bicarbonate, Arm & Hammer washing soda (anhydrous sodium
+  carbonate), Glauber's salt (sodium sulfate decahydrate), potassium chloride
+  and sodium metasilicate. Anhydrous calcium chloride, sodium carbonate
+  decahydrate and anhydrous sodium sulfate are defined for the drinking-water app but never dosed
   here — edit the list when the shelf changes. Recipe selection keeps
   upstream's policy (ADR 0009): best fit first, then the highest-priority
   minimal salt set. The six fork salts sit at the end of `SALT_ORDER`, so
