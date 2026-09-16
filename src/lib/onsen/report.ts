@@ -47,6 +47,7 @@ import {
   cardBoronMol,
   estimateBathPh,
   hydroxideReleased,
+  phAfterDegassing,
   precipitationWarnings,
   speciate,
   withAcid,
@@ -71,9 +72,16 @@ export interface RecipeLine {
   millilitres?: number
 }
 
+/** Rows the Match table carries beyond the modelled ions. */
+export type DerivedMatchKey = 'CO2' | 'Ca-free' | 'Mg-free'
+
 export interface MatchLine {
-  /** A modelled ion, or the dissolved CO₂ the carbonate speciation implies. */
-  ion: IonId | 'CO2'
+  /**
+   * A modelled ion; the dissolved CO₂ the carbonate speciation implies; or
+   * the FREE calcium / magnesium left after the acid's anion has bound its
+   * share (only present when something binds).
+   */
+  ion: IonId | DerivedMatchKey
   label: string
   /** mg/L the card asks for. */
   target: number
@@ -117,6 +125,19 @@ export interface AcidReadout {
   capped: boolean
 }
 
+export type FidelityMetric = 'smell' | 'feel' | 'chemistry' | 'pH'
+
+/** One row of the per-recipe fidelity block: how the bath compares to the onsen on one sense. */
+export interface FidelityLine {
+  metric: FidelityMetric
+  /** What this recipe gives. */
+  recipe: string
+  /** What the card says (or implies). */
+  card: string
+  /** The gap, or why there is none. */
+  note: string
+}
+
 export interface OnsenReadouts {
   tds: number
   /** meq/L, cation minus anion equivalents, of the fitted ions (before speciation). */
@@ -126,6 +147,11 @@ export interface OnsenReadouts {
   sulfateChlorideRatio: number
   /** Estimated bath pH from the full proton balance of the final profile. */
   phEstimate: number
+  /** Where the pH drifts once the dissolved CO₂ has left the tub. */
+  phAfterDegassing: number
+  /** Free (unbound) calcium / magnesium, mg/L; equal to the totals unless an organic acid binds some. */
+  freeCalciumMgPerL: number
+  freeMagnesiumMgPerL: number
   /** pH printed on the card, when given. */
   cardPh?: number
   gypsumCeilingHit: boolean
@@ -145,8 +171,10 @@ export interface OnsenVariant {
   match: MatchLine[]
   extraIons: ExtraIonLine[]
   readouts: OnsenReadouts
+  /** Smell / feel / chemistry / pH against the onsen, one row each. */
+  fidelity: FidelityLine[]
   warnings: string[]
-  /** Largest |difference| (%) over the card's fitted ions. */
+  /** Largest |difference| (%) over the card's fitted ions, free Ca/Mg included. */
   worstDiffPct: number
   /** Precipitation flags that the acid choice can change (everything but amorphous silica). */
   precipitationCount: number
@@ -373,6 +401,28 @@ function buildVariant(
       diffPct: targetMg > 0 ? ((res - targetMg) / targetMg) * 100 : null,
     })
   }
+  const freeCa = spec.caFree * 1000 * IONS.Ca.molarMass
+  const freeMg = spec.mgFree * 1000 * IONS.Mg.molarMass
+  const boundCaFrac = spec.caBound / Math.max(spec.caBound + spec.caFree, 1e-30)
+  const boundMgFrac = spec.mgBound / Math.max(spec.mgBound + spec.mgFree, 1e-30)
+  if (boundCaFrac > 0.01 && (norm.target.Ca ?? 0) > 0) {
+    match.push({
+      ion: 'Ca-free',
+      label: 'free calcium (not bound by the acid)',
+      target: norm.target.Ca ?? 0,
+      result: freeCa,
+      diffPct: ((freeCa - (norm.target.Ca ?? 0)) / (norm.target.Ca ?? 1)) * 100,
+    })
+  }
+  if (boundMgFrac > 0.01 && (norm.target.Mg ?? 0) > 0) {
+    match.push({
+      ion: 'Mg-free',
+      label: 'free magnesium (not bound by the acid)',
+      target: norm.target.Mg ?? 0,
+      result: freeMg,
+      diffPct: ((freeMg - (norm.target.Mg ?? 0)) / (norm.target.Mg ?? 1)) * 100,
+    })
+  }
   const cardCo2 =
     norm.notReplicated.find((n) => n.key === 'CO2')?.mgPerL ?? 0
   const dissolvedCo2 = spec.h2co3 * 1000 * CO2_MOLAR_MASS
@@ -418,6 +468,7 @@ function buildVariant(
     (p) => p.mineral !== 'amorphous-silica',
   ).length
 
+  const phDegassed = phAfterDegassing(final.profile, final.extras)
   const readouts: OnsenReadouts = {
     tds:
       result.readouts.tds +
@@ -426,6 +477,9 @@ function buildVariant(
     targetChargeResidual: chargeResidualOf(norm.target),
     sulfateChlorideRatio: result.readouts.sulfateChlorideRatio,
     phEstimate: phFinal,
+    phAfterDegassing: phDegassed,
+    freeCalciumMgPerL: freeCa,
+    freeMagnesiumMgPerL: freeMg,
     gypsumCeilingHit,
     saturation,
     precipitation,
@@ -458,6 +512,14 @@ function buildVariant(
       if (m.target > 0 && m.diffPct !== null && Math.abs(m.diffPct) > 10) {
         warnings.push(
           `Dissolved CO₂: ${m.result.toFixed(0)} mg/L modelled vs ${m.target.toFixed(0)} mg/L on the card (${pct(m.diffPct)}). It is not fitted: at the card pH and bicarbonate it can only be this much (carbonic acid pKa 6.35 at 25 °C), so the card's own pH, bicarbonate and free-CO₂ figures do not quite agree with each other; pH and bicarbonate were kept.`,
+        )
+      }
+      continue
+    }
+    if (m.ion === 'Ca-free' || m.ion === 'Mg-free') {
+      if (m.diffPct !== null && Math.abs(m.diffPct) > 10) {
+        warnings.push(
+          `${m.label}: ${m.result.toFixed(1)} mg/L of the ${m.target.toFixed(1)} mg/L is free (${pct(m.diffPct)}); the rest is held in soluble complexes by the acid's anion and does not act as hardness, scale or the mineral feel on skin.`,
         )
       }
       continue
@@ -520,8 +582,12 @@ function buildVariant(
     systems.push('water')
     const card =
       readouts.cardPh !== undefined ? ` Card pH: ${readouts.cardPh}.` : ''
+    const drift =
+      phDegassed - phFinal > 0.2
+        ? ` As the dissolved CO₂ leaves the tub the pH climbs toward ${phDegassed.toFixed(1)} — hours in still water, faster with jets or stirring.`
+        : ''
     warnings.push(
-      `Approximate pH ≈ ${phFinal.toFixed(1)} from the proton balance of the result (${systems.join(', ')}; 25 °C, no activity correction — rough guide only).${card}`,
+      `Approximate pH ≈ ${phFinal.toFixed(1)} from the proton balance of the result (${systems.join(', ')}; constants at ${BATH_TEMPERATURE_C} °C, no activity correction — guide to about ±0.2).${card}${drift}`,
     )
     if (
       readouts.cardPh !== undefined &&
@@ -557,6 +623,24 @@ function buildVariant(
     }
   }
 
+  const fidelity = fidelityLines(norm, {
+    acidId,
+    acidMmolPerL,
+    phFinal,
+    phDegassed,
+    worst,
+    tds: readouts.tds,
+    dissolvedCo2,
+    cardCo2,
+    silicaMgPerL: final.profile.H2SiO3 ?? 0,
+    freeCa,
+    freeMg,
+    boundCaFrac,
+    boundMgFrac,
+    extraIons,
+    precipitation,
+  })
+
   return {
     acid: acidId,
     acidLabel: salt.purchaseName,
@@ -564,10 +648,160 @@ function buildVariant(
     match,
     extraIons,
     readouts,
+    fidelity,
     warnings,
     worstDiffPct: worst,
     precipitationCount,
   }
+}
+
+/** Hardness as mg/L CaCO₃ from calcium and magnesium in mg/L. */
+function hardnessAsCaCO3(caMg: number, mgMg: number): number {
+  return (caMg / IONS.Ca.molarMass + mgMg / IONS.Mg.molarMass) * 100.087
+}
+
+/** Sum of everything the card lists, mg/L (fitted ions plus the rest). */
+function cardTds(norm: NormalizedOnsen): number {
+  let t = 0
+  for (const ion of ION_ORDER) t += norm.target[ion] ?? 0
+  for (const n of norm.notReplicated) t += n.mgPerL ?? 0
+  return t
+}
+
+const SMELL_KEYS: Record<string, string> = {
+  H2S: 'free hydrogen sulfide',
+  HS: 'hydrosulfide',
+  S2O3: 'thiosulfate',
+  S: 'total sulfur',
+  Fe2: 'iron(II)',
+  Fe3: 'iron(III)',
+  Fe: 'iron',
+  NH4: 'ammonium',
+}
+
+interface FidelityInputs {
+  acidId: SaltId
+  acidMmolPerL: number
+  phFinal: number
+  phDegassed: number
+  worst: number
+  tds: number
+  dissolvedCo2: number
+  cardCo2: number
+  silicaMgPerL: number
+  freeCa: number
+  freeMg: number
+  boundCaFrac: number
+  boundMgFrac: number
+  extraIons: ExtraIonLine[]
+  precipitation: PrecipitationWarning[]
+}
+
+/** The four senses Colin judges a bath by, one line each, recipe vs card. */
+function fidelityLines(norm: NormalizedOnsen, f: FidelityInputs): FidelityLine[] {
+  const out: FidelityLine[] = []
+  const salt = SALTS[f.acidId]
+
+  // --- smell -------------------------------------------------------------
+  const smelly = norm.notReplicated.filter((n) => SMELL_KEYS[n.key] !== undefined)
+  const sulfur = smelly.filter((n) => ['H2S', 'HS', 'S2O3', 'S'].includes(n.key))
+  const iron = smelly.filter((n) => n.key.startsWith('Fe'))
+  const cardSmell: string[] = []
+  if (sulfur.length) {
+    cardSmell.push(
+      `sulfur ${sulfur.map((n) => `${n.key} ${n.mgPerL !== undefined ? n.mgPerL.toFixed(1) : n.reported} mg/L`).join(', ')} (rotten-egg onsen smell)`,
+    )
+  }
+  if (iron.length) {
+    cardSmell.push(
+      `iron ${iron.map((n) => `${n.mgPerL !== undefined ? n.mgPerL.toFixed(1) : n.reported} mg/L`).join(', ')} (metallic note, rust tint)`,
+    )
+  }
+  if (f.cardCo2 >= 100) cardSmell.push(`free CO₂ ${f.cardCo2.toFixed(0)} mg/L (faint fizz)`)
+  const recipeSmell: string[] = []
+  if (f.dissolvedCo2 >= 100) recipeSmell.push(`CO₂ ${f.dissolvedCo2.toFixed(0)} mg/L fizz`)
+  if (f.acidId === 'hydrochloricAcid' && f.acidMmolPerL > 0) recipeSmell.push('no acid odour once mixed')
+  if (f.acidId === 'lacticAcid' && f.acidMmolPerL > 0) recipeSmell.push('faint sour-milk note from lactate')
+  const ironMg = iron.reduce((acc, n) => acc + (n.mgPerL ?? 0), 0)
+  const sulfurMg = sulfur.reduce((acc, n) => acc + (n.mgPerL ?? 0), 0)
+  let smellNote = 'no gap'
+  if (sulfur.length && sulfurMg >= 1) {
+    smellNote = `NOT reproduced: ${sulfurMg.toFixed(1)} mg/L of sulfur species gives the spring its rotten-egg smell and skin effect; sulfur is excluded by policy (no bath-safe ingredient is dosed). This is the largest gap for this spring.`
+  } else if (sulfur.length) {
+    smellNote = `Faint sulfur note (${sulfurMg.toFixed(1)} mg/L) not reproduced; sulfur is excluded by policy.`
+  } else if (iron.length && ironMg >= 1) {
+    smellNote = `NOT reproduced: ${ironMg.toFixed(1)} mg/L iron gives a metallic smell and a rust-coloured, staining bath; iron is excluded by policy.`
+  } else if (iron.length) {
+    smellNote = `Faint metallic note from ${ironMg.toFixed(1)} mg/L iron not reproduced (iron excluded by policy); hard to notice at this level.`
+  }
+  out.push({
+    metric: 'smell',
+    recipe: recipeSmell.length ? recipeSmell.join('; ') : 'odourless',
+    card: cardSmell.length ? cardSmell.join('; ') : 'nothing smell-defining on the card',
+    note: smellNote,
+  })
+
+  // --- feel --------------------------------------------------------------
+  const cardCa = norm.target.Ca ?? 0
+  const cardMg = norm.target.Mg ?? 0
+  const cardHard = hardnessAsCaCO3(cardCa, cardMg)
+  const freeHard = hardnessAsCaCO3(f.freeCa, f.freeMg)
+  const cardT = cardTds(norm)
+  const feelNotes: string[] = []
+  if (f.boundCaFrac > 0.05 || f.boundMgFrac > 0.05) {
+    feelNotes.push(
+      `${salt.acidAnion?.key ?? 'the acid'} binds ${(f.boundCaFrac * 100).toFixed(0)}% of the calcium and ${(f.boundMgFrac * 100).toFixed(0)}% of the magnesium: softer, less astringent water than the onsen`,
+    )
+  }
+  if (f.acidId === 'lacticAcid' && f.acidMmolPerL > 0) {
+    feelNotes.push('lactate adds a faint humectant / exfoliant (alpha-hydroxy) feel the onsen lacks')
+  }
+  if (f.dissolvedCo2 >= 250) feelNotes.push('enough dissolved CO₂ for bubbles to form on the skin')
+  else if (f.cardCo2 >= 250) feelNotes.push(`card has ${f.cardCo2.toFixed(0)} mg/L CO₂ (bubbles on skin); recipe holds ${f.dissolvedCo2.toFixed(0)} — below the ~250 where bubbles are felt`)
+  if (f.silicaMgPerL > 0 && f.precipitation.some((p) => p.mineral === 'amorphous-silica')) {
+    feelNotes.push('silica supersaturated: the silky "tsuru-tsuru" film, hazing over hours as it polymerises')
+  }
+  if (Math.abs(f.tds - cardT) / Math.max(cardT, 1) > 0.15) {
+    feelNotes.push(`total minerals ${f.tds > cardT ? 'above' : 'below'} the card by ${(Math.abs(f.tds - cardT) / Math.max(cardT, 1) * 100).toFixed(0)}%`)
+  }
+  out.push({
+    metric: 'feel',
+    recipe: `TDS ${f.tds.toFixed(0)} mg/L; hardness ${freeHard.toFixed(0)} mg/L as CaCO₃ (free); CO₂ ${f.dissolvedCo2.toFixed(0)} mg/L; silica ${f.silicaMgPerL.toFixed(0)} mg/L`,
+    card: `TDS ${cardT.toFixed(0)} mg/L; hardness ${cardHard.toFixed(0)} mg/L as CaCO₃; CO₂ ${f.cardCo2.toFixed(0)} mg/L; silica ${(norm.target.H2SiO3 ?? 0).toFixed(0)} mg/L`,
+    note: feelNotes.length ? feelNotes.join('; ') : 'no gap beyond the ion differences above',
+  })
+
+  // --- chemistry ---------------------------------------------------------
+  const chemNotes: string[] = []
+  if (f.extraIons.length) {
+    chemNotes.push(`adds ${f.extraIons.map((e) => `${e.key} ${e.mgPerL.toFixed(0)} mg/L`).join(', ')} that no onsen has`)
+  }
+  const flags = f.precipitation.filter((p) => p.mineral !== 'amorphous-silica').map((p) => p.mineral)
+  if (flags.length) chemNotes.push(`precipitation: ${flags.join(', ')}`)
+  out.push({
+    metric: 'chemistry',
+    recipe: `worst fitted ion ${f.worst.toFixed(0)}% off${f.boundCaFrac > 0.01 ? ` (free calcium counted)` : ''}`,
+    card: 'the listed cations, anions and silica',
+    note: chemNotes.length ? chemNotes.join('; ') : 'all fitted ions within the Match table',
+  })
+
+  // --- pH ----------------------------------------------------------------
+  const drift = f.phDegassed - f.phFinal
+  const phNote: string[] = []
+  if (norm.ph !== undefined && Math.abs(f.phFinal - norm.ph) > 0.2) {
+    phNote.push(`${Math.abs(f.phFinal - norm.ph).toFixed(1)} units ${f.phFinal > norm.ph ? 'above' : 'below'} the card`)
+  }
+  if (drift > 0.2) {
+    phNote.push(`climbs to ${f.phDegassed.toFixed(1)} once the CO₂ has left (hours in a still tub; the real onsen bath drifts the same way)`)
+  }
+  out.push({
+    metric: 'pH',
+    recipe: drift > 0.2 ? `${f.phFinal.toFixed(1)} fresh → ${f.phDegassed.toFixed(1)} degassed` : f.phFinal.toFixed(1),
+    card: norm.ph !== undefined ? norm.ph.toFixed(1) : 'not given',
+    note: phNote.length ? phNote.join('; ') : 'matches',
+  })
+
+  return out
 }
 
 /** Rank variants: composition (whole-percent buckets), precipitation, |ΔpH|, then `ACIDS` order. */
@@ -787,6 +1021,14 @@ export function renderMarkdown(r: OnsenResult): string {
     lines.push(
       `TDS of result: ${fmt(v.readouts.tds, 0)} mg/L. Sulfate:chloride ${isFinite(v.readouts.sulfateChlorideRatio) ? fmt(v.readouts.sulfateChlorideRatio, 2) : '∞'}. Estimated pH ${fmt(v.readouts.phEstimate, 1)}${v.readouts.cardPh !== undefined ? ` (card ${v.readouts.cardPh})` : ''}.`,
     )
+    lines.push('')
+    lines.push('### Fidelity')
+    lines.push('')
+    lines.push('| Metric | This recipe | The onsen card | Gap |')
+    lines.push('| --- | --- | --- | --- |')
+    for (const fl of v.fidelity) {
+      lines.push(`| ${fl.metric} | ${fl.recipe} | ${fl.card} | ${fl.note} |`)
+    }
     lines.push('')
     lines.push('### Warnings')
     lines.push('')

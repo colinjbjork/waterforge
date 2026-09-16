@@ -387,7 +387,7 @@ export const SALTS: Record<SaltId, Salt> = {
       pkas: [3.86],
     },
     handling:
-      'Food-grade but concentrated: gloves, avoid eyes; a mild acid with no fumes. Stir into the bath water before the other salts.',
+      'Food-grade but concentrated: gloves, avoid eyes; a mild acid with no fumes. Stir into the bath water before the other salts. Lactate is an alpha-hydroxy acid salt: at these levels it adds a faint humectant / exfoliant feel no onsen has, and binds a little of the calcium (see the free-calcium row).',
   },
   citricAcid: {
     id: 'citricAcid',
@@ -407,7 +407,7 @@ export const SALTS: Record<SaltId, Salt> = {
       pkas: [3.13, 4.76, 6.4],
     },
     handling:
-      'Food-grade powder; keep dust out of eyes. Dissolve in the bath water before the other salts (it fizzes against bicarbonate: that is the CO₂ being made). Citrate binds part of the calcium and magnesium as soluble complexes, so the water feels a little softer than the card and scales less; if the bag says monohydrate, use 9% more.',
+      'Food-grade powder; keep dust out of eyes. Dissolve in the bath water before the other salts (it fizzes against bicarbonate: that is the CO₂ being made). Citrate binds a large share of the calcium and magnesium as soluble complexes (the free-calcium and free-magnesium rows show how much): the water feels softer and less astringent than the card and scales less, which is a real departure from the onsen. If the bag says monohydrate, use 9% more.',
   },
   sodiumBisulfate: {
     id: 'sodiumBisulfate',

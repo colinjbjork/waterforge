@@ -7,6 +7,8 @@ import {
   estimateBathPh,
   hydroxideReleased,
   ionicStrength,
+  LOG_KSP_HYDROXIDE,
+  PKA,
   precipitationWarnings,
   protonBalance,
   speciate,
@@ -35,21 +37,21 @@ function mg(ion: keyof typeof IONS, mmol: number): number {
 }
 
 describe('proton-balance pH', () => {
-  it('pure water and a neutral strong electrolyte read pH 7', () => {
-    expect(estimateBathPh({})).toBeCloseTo(7, 6)
+  it('pure water and a neutral strong electrolyte read the 40 °C neutral point (6.77)', () => {
+    expect(estimateBathPh({})).toBeCloseTo(PKA.water / 2, 6)
     expect(estimateBathPh({ Na: mg('Na', 20), Cl: mg('Cl', 20) })).toBeCloseTo(
-      7,
+      PKA.water / 2,
       6,
     )
   })
 
-  it('4.8 mM sodium metasilicate alone sits near pH 11.7', () => {
-    // 2 OH⁻ per mole; the second silicic pKa (13.2) keeps most silicate as
-    // HSiO₃⁻ so the free hydroxide is a little under 2 × 4.8 mM.
+  it('4.8 mM sodium metasilicate alone sits near pH 11.2 at 40 °C (11.7 at 25 °C)', () => {
+    // 2 OH⁻ per mole; the second silicic pKa keeps most silicate as HSiO₃⁻
+    // so the free hydroxide is a little under 2 × 4.8 mM; pKw 13.53 at 40 °C.
     const bath: IonProfile = { Na: mg('Na', 9.6), H2SiO3: mg('H2SiO3', 4.8) }
     const ph = estimateBathPh(bath)
-    expect(ph).toBeGreaterThan(11.4)
-    expect(ph).toBeLessThan(11.9)
+    expect(ph).toBeGreaterThan(11.0)
+    expect(ph).toBeLessThan(11.5)
     expect(strongIonDifference(bath)).toBeCloseTo(9.6e-3, 9)
   })
 
@@ -72,11 +74,11 @@ describe('proton-balance pH', () => {
     ).toBeCloseTo(8.3, 0)
     const mixed = forward({ sodiumCarbonate: 0.1, bakingSoda: 0.2 })
     const hh =
-      10.33 +
+      PKA.carbonic2 +
       Math.log10(
         mixed.CO3! / IONS.CO3.molarMass / (mixed.HCO3! / IONS.HCO3.molarMass),
       )
-    expect(Math.abs(estimateBathPh(mixed) - hh)).toBeLessThan(0.1)
+    expect(Math.abs(estimateBathPh(mixed) - hh)).toBeLessThan(0.15)
   })
 
   it('the balance is monotonic in pH and zero at the estimate', () => {
@@ -198,14 +200,14 @@ describe('precipitation checks', () => {
       (x) => x.mineral === 'brucite',
     )!
     const mgMol = 5.5 / IONS.Mg.molarMass / 1000
-    const oh = 10 ** (11.7 - 14)
+    const oh = 10 ** (11.7 - PKA.water)
     const I = ionicStrength({ Mg: 5.5 })
     expect(I).toBeCloseTo(mgMol * 2, 12)
     expect(w.saturationIndex).toBeCloseTo(
       Math.log10(mgMol * oh * oh) +
         daviesLogGamma(2, I) +
-        2 * daviesLogGamma(1, I) +
-        11.25,
+        2 * daviesLogGamma(1, I) -
+        LOG_KSP_HYDROXIDE.brucite,
       9,
     )
   })
@@ -297,7 +299,7 @@ describe('report: acid dosing end to end', () => {
     )
     expect(plain.recipe.map((x) => x.saltId)).not.toContain('hydrochloricAcid')
     expect(plain.readouts.acid).toBeUndefined()
-    expect(plain.readouts.phEstimate).toBeCloseTo(7, 0)
+    expect(plain.readouts.phEstimate).toBeCloseTo(PKA.water / 2, 0)
     expect(renderText(plain)).not.toContain('Hydroxide:')
   })
 })

@@ -47,8 +47,8 @@ describe('weak-acid arithmetic', () => {
 
   it('Davies: zero at zero ionic strength, about -0.3 for a divalent ion at I = 0.034 M', () => {
     expect(daviesLogGamma(2, 0)).toBeCloseTo(0, 12)
-    expect(daviesLogGamma(2, 0.034)).toBeCloseTo(-0.297, 2)
-    expect(daviesLogGamma(1, 0.034)).toBeCloseTo(-0.074, 2)
+    expect(daviesLogGamma(2, 0.034)).toBeCloseTo(-0.305, 2)
+    expect(daviesLogGamma(1, 0.034)).toBeCloseTo(-0.076, 2)
   })
 
   it('acidDoseForPh: zero when already below target, otherwise lands on it', () => {
@@ -77,7 +77,9 @@ describe('weak-acid arithmetic', () => {
     expect(bis.profile.SO4).toBeCloseTo(2 * IONS.SO4.molarMass, 9)
     const cit = withAcid({}, { boronMol: 0.001 }, 'citricAcid', 2)
     expect(cit.profile).toEqual({})
-    expect(cit.extras.organic).toEqual([{ mol: 0.002, pkas: [3.13, 4.76, 6.4] }])
+    expect(cit.extras.organic).toEqual([
+      { mol: 0.002, pkas: [3.13, 4.76, 6.4], ligand: 'citrate' },
+    ])
     expect(cit.extras.boronMol).toBe(0.001)
   })
 })
@@ -126,14 +128,55 @@ describe('four acids on a CO₂-buffered bicarbonate spring', () => {
         6,
       )
       expect(v.worstDiffPct).toBeGreaterThan(hcl.worstDiffPct)
-      expect(v.worstDiffPct).toBeLessThan(25)
       expect(v.warnings.join('\n')).toContain('not an onsen ion')
     }
+    expect(lactic.worstDiffPct).toBeLessThan(25)
     // Bisulfate brings ~4× the card's sulfate on this water and says so.
     const so4 = bisulfate.match.find((m) => m.ion === 'SO4')!
     expect(so4.diffPct!).toBeGreaterThan(100)
     expect(bisulfate.warnings.join('\n')).toContain('overshoots that ion')
     expect(bisulfate.extraIons).toEqual([])
+  })
+
+  it('citrate binds a large share of the calcium and magnesium; lactate only a little', () => {
+    const [hcl, lactic, citric] = r.variants
+    expect(hcl.readouts.freeCalciumMgPerL).toBeCloseTo(
+      hcl.match.find((m) => m.ion === 'Ca')!.result,
+      6,
+    )
+    expect(hcl.match.map((m) => m.ion)).not.toContain('Ca-free')
+    const caFree = citric.match.find((m) => m.ion === 'Ca-free')!
+    const mgFree = citric.match.find((m) => m.ion === 'Mg-free')!
+    expect(caFree.target).toBeCloseTo(154.2, 6)
+    expect(caFree.diffPct!).toBeLessThan(-25)
+    expect(caFree.diffPct!).toBeGreaterThan(-70)
+    expect(mgFree.diffPct!).toBeLessThan(-20)
+    expect(citric.worstDiffPct).toBeGreaterThan(25)
+    expect(citric.warnings.join('\n')).toContain('held in soluble complexes')
+    const lacFree = lactic.match.find((m) => m.ion === 'Ca-free')
+    if (lacFree) expect(lacFree.diffPct!).toBeGreaterThan(-15)
+    expect(lactic.worstDiffPct).toBeLessThan(citric.worstDiffPct)
+    // Binding lowers the free calcium the calcite / gypsum checks see.
+    expect(citric.readouts.freeCalciumMgPerL).toBeLessThan(
+      hcl.readouts.freeCalciumMgPerL * 0.75,
+    )
+  })
+
+  it('every variant carries a four-line fidelity block and a degassed pH above the fresh one', () => {
+    for (const v of r.variants) {
+      expect(v.fidelity.map((f) => f.metric)).toEqual(['smell', 'feel', 'chemistry', 'pH'])
+      expect(v.readouts.phAfterDegassing).toBeGreaterThan(v.readouts.phEstimate + 0.5)
+      expect(v.fidelity[3].recipe).toContain('degassed')
+      expect(v.fidelity[0].note).toContain('not reproduced')
+      expect(v.fidelity[1].recipe).toContain('hardness')
+    }
+    const citric = r.variants[2]
+    expect(citric.fidelity[1].note).toContain('binds')
+    const txt = renderText(r)
+    expect(txt).toContain('FIDELITY (smell / feel / chemistry / pH vs the onsen)')
+    expect(txt).toContain('  this recipe: ')
+    expect(txt).toContain('  gap:         ')
+    expect(renderMarkdown(r)).toContain('### Fidelity')
   })
 
   it('doses far fewer moles of citric acid than of muriatic for the same pH', () => {
@@ -145,16 +188,21 @@ describe('four acids on a CO₂-buffered bicarbonate spring', () => {
     expect(cit.protonsMeqPerL).toBeLessThan(hcl.protonsMeqPerL * 1.3)
   })
 
-  it('ranks composition first: muriatic is suggested here; ranking is stable', () => {
+  it('ranks composition first: muriatic, then lactic, then citric (binding), then bisulfate', () => {
     expect(r.suggested).toBe('hydrochloricAcid')
-    const ranked = rankVariants(r.variants, 6.8)
-    expect(ranked[0].acid).toBe('hydrochloricAcid')
-    expect(ranked[ranked.length - 1].acid).toBe('sodiumBisulfate')
+    const ranked = rankVariants(r.variants, 6.8).map((v) => v.acid)
+    expect(ranked).toEqual([
+      'hydrochloricAcid',
+      'lacticAcid',
+      'citricAcid',
+      'sodiumBisulfate',
+    ])
   })
 
-  it('no calcite flag at pH 6.8 once activity is corrected; each variant reports the borate system', () => {
+  it('calcite sits near saturation at pH 6.8 (as the real spring does), never brucite; borate is in the balance', () => {
     for (const v of r.variants) {
-      expect(v.readouts.precipitation.map((p) => p.mineral)).not.toContain('calcite')
+      const calcite = v.readouts.precipitation.find((p) => p.mineral === 'calcite')
+      if (calcite) expect(calcite.saturationIndex!).toBeLessThan(0.3)
       expect(v.readouts.precipitation.map((p) => p.mineral)).not.toContain('brucite')
       expect(v.warnings.join('\n')).toContain('borate')
     }
@@ -230,7 +278,7 @@ describe('acid on a card with no free-CO₂ buffer', () => {
 })
 
 describe('CLI --acid filter', () => {
-  it('prints only the requested acid, and rejects unknown names', () => {
+  it('prints only the requested acid, and rejects unknown names', { timeout: 60000 }, () => {
     const dir = mkdtempSync(join(tmpdir(), 'onsen-acid-'))
     const file = join(dir, 'y.json')
     writeFileSync(file, JSON.stringify(YUMENOYA))

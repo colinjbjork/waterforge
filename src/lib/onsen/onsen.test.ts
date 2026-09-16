@@ -12,6 +12,7 @@ import {
   validateOnsenInput,
 } from './index'
 import type { OnsenInput } from './index'
+import { PKA } from './chemistry'
 import {
   ACIDS,
   IONS,
@@ -314,16 +315,19 @@ describe('alkaline card: sodium carbonate + baking soda', () => {
     const cardCarbonMol =
       profile.HCO3! / IONS.HCO3.molarMass + profile.CO3! / IONS.CO3.molarMass
     expect(carbonMol).toBeCloseTo(cardCarbonMol, 2)
+    // At 40 °C the salts alone sit a touch BELOW 9.5 and no base is dosed,
+    // so the split follows the estimated pH, not the card's.
+    const ph = r.readouts.phEstimate
+    expect(ph).toBeLessThanOrEqual(9.5)
+    expect(ph).toBeGreaterThan(9.3)
     expect(co3.result / hco3.result).toBeCloseTo(
-      (10 ** (9.5 - 10.33) * IONS.CO3.molarMass) / IONS.HCO3.molarMass,
+      (10 ** (ph - PKA.carbonic2) * IONS.CO3.molarMass) / IONS.HCO3.molarMass,
       3,
     )
     expect(r.recipe.map((x) => x.saltId).filter((id) => !ACIDS.includes(id)).sort()).toEqual([
       'bakingSoda',
       'sodiumCarbonate',
     ])
-    // The salts alone sit a touch above 9.5, so a whisker of acid is dosed.
-    expect(r.readouts.phEstimate).toBeCloseTo(9.5, 2)
     expect(r.readouts.acid?.mmolPerL ?? 0).toBeLessThan(0.5)
     expect(r.readouts.cardPh).toBe(9.5)
     const md = renderMarkdown(r)

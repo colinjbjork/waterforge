@@ -138,12 +138,22 @@ For each acid:
    "just cancel the hydroxide the salts release" (resolved as the pH a strong
    acid at that dose would give, so all four land in the same place).
 2. **Dose by bisection** on the full proton balance until the modelled bath
-   pH equals the target. The balance covers carbonate (pKa 6.35 / 10.33),
-   silicic acid (9.84 / 13.2), sulfate/bisulfate (1.99), the acid's own
+   pH equals the target. The balance covers carbonate (pKa 6.30 / 10.22),
+   silicic acid (9.6 / 12.9), sulfate/bisulfate (2.10), the acid's own
    anion (lactate 3.86; citrate 3.13 / 4.76 / 6.40), boron from the card's
-   HBO₂ / H₃BO₃ line (9.24) and water; activity = concentration, 25 °C.
-   Weak acids therefore need fewer moles per proton than their formula says
-   when the target pH is near a pKa — citric at pH 6.8 delivers ~2.7 H⁺.
+   HBO₂ / H₃BO₃ line (9.08) and water (pKw 13.53) — **all at the 40 °C bath
+   temperature**, because the card pH is a meter reading and the number is
+   only reproducible with the constants of the water it is read in (neutral
+   is 6.77 at 40 °C). Activity = concentration in the pH balance. Weak acids
+   need fewer moles per proton than their formula says when the target pH is
+   near a pKa — citric at pH 6.8 delivers ~2.7 H⁺.
+   **Complexation is solved inside the balance**: citrate binds Ca²⁺, Mg²⁺
+   and Na⁺ (log K 3.5 / 3.4 / 0.8, plus the HCit²⁻ complexes) and lactate
+   binds Ca²⁺ / Mg²⁺ weakly (1.1 / 0.9), as a fixed point at every trial
+   pH. Bound ligand cannot hold protons, so the dose shifts a little, and
+   the FREE calcium / magnesium are what the precipitation checks and the
+   Match table's `free calcium` / `free magnesium` rows use. On Yumenoya
+   citric acid binds ~30 % of both; lactate a few percent.
 3. **Carbon compensation.** Protons beyond the hydroxide turn bicarbonate
    into dissolved CO₂. The bicarbonate that is lost is added back to the fit
    target and the fit re-run, so the card's bicarbonate still matches *at
@@ -158,17 +168,32 @@ For each acid:
    chloride springs best; the organic acids leave Na⁺ high and Cl⁻ low by
    ~10–15 % on a chloride spring because nothing else supplies chloride
    without sodium; bisulfate only suits sulfate-rich cards.
-5. **Precipitation at the final pH**: gypsum, calcite (carbonate speciated
-   at that pH), brucite Mg(OH)₂ (log Ksp −11.25), portlandite Ca(OH)₂ (−5.3),
+5. **Precipitation at the final pH, on the free ions**: gypsum (log Ksp
+   −4.61), calcite (−8.58, carbonate speciated at that pH; "right at
+   saturation" below SI +0.3 — the travertine state a real bicarbonate
+   spring is in), brucite Mg(OH)₂ (−11.7), portlandite Ca(OH)₂ (−5.45),
    calcium/magnesium silicate hydrate (pH ≥ 10 with Ca or Mg and silica),
-   amorphous silica at 40 °C (Gunnarsson & Arnórsson 2000). The ionic
-   saturation indices use **Davies activity coefficients** at the bath's
-   ionic strength; the pH estimate does not.
+   amorphous silica (Gunnarsson & Arnórsson 2000), all at 40 °C. The ionic
+   saturation indices use **Davies activity coefficients** (A = 0.524) at
+   the bath's ionic strength; the pH estimate does not.
+   **Degassing**: `phAfterDegassing` strips the carbonic acid and
+   re-balances until nothing volatile is left — where the pH drifts once
+   the CO₂ has escaped (hours in a still tub, minutes with jets). The report
+   prints "6.8 fresh → 8.6 degassed" style figures; the real onsen bath
+   drifts the same way.
 6. **Ranking**: composition first (largest |difference| over the card's
-   fitted ions, whole-percent buckets), then the number of precipitation
-   flags the acid can change, then |estimated − card pH|, then `ACIDS`
-   order. The winner is marked `*` in the summary table; all four are
-   printed.
+   fitted ions **including the free-calcium / free-magnesium rows**,
+   whole-percent buckets), then the number of precipitation flags the acid
+   can change, then |estimated − card pH|, then `ACIDS` order. The winner is
+   marked `*` in the summary table; all four are printed.
+7. **Fidelity block** — the four things a bath is judged by, one line each,
+   recipe vs card vs gap: **smell** (sulfur / iron / CO₂ fizz on the card;
+   sulfur and iron are excluded by policy and the block says so in
+   proportion to how much the card has), **feel** (TDS, free hardness as
+   CaCO₃, dissolved CO₂ against the ~250 mg/L where bubbles are felt, silica
+   and its silky supersaturated film, citrate/lactate binding and the
+   lactate alpha-hydroxy feel), **chemistry** (worst fitted ion, foreign
+   ions, precipitation flags) and **pH** (fresh vs degassed vs card).
 
 pH is **never a fit variable** in the least-squares step; the acid dose is
 solved afterwards. A card whose pH sits above what the salts give (a strongly
@@ -200,8 +225,11 @@ Bath volume, card units, spring type, temperature, card pH.
 Liquid: <ingredient>: <g> g ≈ <mL> mL (density)   — one line per liquid
 ### Match
 | Ion | Target mg/L | Result mg/L | Difference (%) |
-  … plus a `dissolved CO₂` row and, for lactic/citric, a "(from the acid)" row
+  … plus `free calcium` / `free magnesium` rows when the acid binds any,
+  a `dissolved CO₂` row and, for lactic/citric, a "(from the acid)" row
 TDS, sulfate:chloride and estimated pH (card pH) of the result.
+### Fidelity
+| Metric | This recipe | The onsen card | Gap |   (smell, feel, chemistry, pH)
 ### Warnings — the per-acid list below
 
 ## Not replicated
@@ -231,11 +259,13 @@ Per-acid warnings
 `--json` prints one object: `variants[]` (one per acid: `acid`, `acidLabel`,
 `recipe[]` with `millilitres` on liquid lines, `match[]` including the
 `CO2` row, `extraIons[]`, `readouts`, `warnings[]`, `worstDiffPct`,
-`precipitationCount`), `suggested`, `sharedWarnings[]`, `notReplicated[]`,
+`precipitationCount`, `fidelity[]` = `{ metric, recipe, card, note }`),
+`suggested`, `sharedWarnings[]`, `notReplicated[]`,
 and — mirroring `variants[0]` (muriatic) for older callers — top-level
 `recipe`, `match`, `readouts` and `warnings`. `readouts` holds `tds`,
 `chargeResidual`, `targetChargeResidual`, `sulfateChlorideRatio`,
-`phEstimate`, `cardPh?`, `gypsumCeilingHit`, `saturation[]`,
+`phEstimate`, `phAfterDegassing`, `freeCalciumMgPerL`,
+`freeMagnesiumMgPerL`, `cardPh?`, `gypsumCeilingHit`, `saturation[]`,
 `precipitation[]` and `acid?` = `{ saltId, mmolPerL, protonsMeqPerL,
 hydroxideReleased, targetPh, basis, phWithoutAcid,
 extraBicarbonateMmolPerL, dissolvedCo2MgPerL, capped }`. `--acid <name>`
@@ -284,10 +314,12 @@ trims `variants` to one.
   `estimatePh()`; `Readouts.phEstimate`.
 - `src/lib/solver/oracle.ts` — driver ions for the new salts.
 - `src/lib/onsen/` — input types, validation, normalisation, species table,
-  `chemistry.ts` (hydroxide accounting, proton balance with polyprotic
-  organic acids / sulfate / borate, `acidDoseForPh` bisection, Davies
-  activity coefficients, precipitation checks), `report.ts` (per-acid
-  fit-and-dose loop with carbon compensation, ranking, Markdown),
-  `text.ts` (bordered text with the acid summary and one block per acid).
+  `chemistry.ts` (40 °C constants, hydroxide accounting, proton balance with
+  polyprotic organic acids / sulfate / borate and Ca-Mg-Na complexation by
+  citrate and lactate, `acidDoseForPh` bisection, `phAfterDegassing`,
+  Davies activity coefficients, precipitation checks on free ions),
+  `report.ts` (per-acid fit-and-dose loop with carbon compensation, free-ion
+  rows, fidelity block, ranking, Markdown), `text.ts` (bordered text with
+  the acid summary and one block per acid).
 - `src/cli/onsen.ts` + `scripts/onsen.mjs` — the CLI, executed through
   Vite's `runnerImport` (no new dependency).

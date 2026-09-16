@@ -133,6 +133,15 @@ function renderVariant(
   )
   lines.push('')
 
+  lines.push('FIDELITY (smell / feel / chemistry / pH vs the onsen)')
+  for (const f of v.fidelity) {
+    lines.push(`${f.metric.toUpperCase()}`)
+    lines.push(`  this recipe: ${f.recipe}`)
+    lines.push(`  the card:    ${f.card}`)
+    lines.push(`  gap:         ${f.note}`)
+  }
+  lines.push('')
+
   lines.push('WARNINGS')
   for (const w of v.warnings) lines.push(`- ${w}`)
   lines.push('')

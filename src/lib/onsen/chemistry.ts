@@ -1,24 +1,31 @@
 // Bath chemistry the least-squares fit cannot see.
 //
 // The solver matches ion masses. It does not know that sodium metasilicate
-// dissolves to 2 Na⁺ + silicate + 2 OH⁻, so a recipe that hits the card's
-// metasilicic-acid figure with it lands at pH ≈ 11–12 and drops the calcium and
-// magnesium out as hydroxide / silicate solids. This module closes that gap:
+// dissolves to 2 Na⁺ + silicate + 2 OH⁻, that a bicarbonate spring's pH is set
+// by dissolved CO₂ no salt supplies, or that citrate binds calcium. This
+// module closes those gaps for a bath at BATH_TEMPERATURE_C:
 //
 // 1. `hydroxideReleased` — meq/L of OH⁻ the dosed salts release (from each
 //    salt's declared `netCharge`).
-// 2. `cardAcidity` — the free acidity the card itself reports (its H⁺ / OH⁻
-//    lines, else its pH), which the bath should end up at.
-// 3. `estimateBathPh` — the pH of a result profile from a full proton
-//    balance over the carbonate, silicate and water systems (bisection).
-// 4. `precipitationWarnings` — saturation checks at that pH for brucite
-//    Mg(OH)₂, portlandite Ca(OH)₂, calcium/magnesium silicate hydrate, and
-//    amorphous silica.
+// 2. `speciate` / `protonBalance` / `estimateBathPh` — a full proton balance
+//    over carbonate, silicate, sulfate/bisulfate, borate, water and the dosed
+//    acid's own anion (lactate, citrate), with calcium / magnesium / sodium
+//    complexation by citrate and lactate solved as a fixed point at each pH.
+// 3. `acidDoseForPh` — the dose of any acid that lands the bath on a target
+//    pH, by bisection.
+// 4. `precipitationWarnings` — saturation checks at that pH on the FREE ions
+//    for gypsum, calcite, brucite Mg(OH)₂, portlandite Ca(OH)₂, calcium /
+//    magnesium silicate hydrate, and amorphous silica, with Davies activity
+//    coefficients at the bath's ionic strength.
+// 5. `phAfterDegassing` — where the pH drifts once the dissolved CO₂ has
+//    left an open tub (hours in still water).
 //
-// Every constant is a 25 °C literature value with activity coefficients
-// ignored, except the amorphous-silica solubility, which is evaluated at bath
-// temperature. Treat the pH as a rough guide, the precipitation flags as
-// "this will visibly happen", not as an equilibrium model.
+// Equilibrium constants are literature values evaluated at the bath
+// temperature (40 °C), not 25 °C: the card's pH is a meter reading, so
+// matching the number needs the constants of the water it is read in. The
+// pH balance uses activity = concentration; the saturation indices apply
+// Davies coefficients. Treat the pH as a guide to ±0.2, the precipitation
+// flags as "this will visibly happen", not as an equilibrium model.
 
 import {
   ATOMIC_WEIGHTS,
@@ -27,73 +34,70 @@ import {
   OH_WEIGHT,
   SALTS,
 } from '../chem/constants'
-import { EXTRA_SPECIES } from './species'
 import type { IonId, SaltId } from '../chem/constants'
 import type { IonProfile, SaltDose } from '../solver/types'
+import { EXTRA_SPECIES } from './species'
 import type { NormalizedOnsen } from './types'
 
-/** Acid dissociation constants (pKa, 25 °C) of the weak systems modelled. */
-export const PKA = {
-  /** H₂CO₃ ⇌ HCO₃⁻ + H⁺ */
-  carbonic1: 6.35,
-  /** HCO₃⁻ ⇌ CO₃²⁻ + H⁺ */
-  carbonic2: 10.33,
-  /** H₄SiO₄ (≡ H₂SiO₃·H₂O) ⇌ H₃SiO₄⁻ + H⁺ (Sjöberg et al. 1985) */
-  silicic1: 9.84,
-  /** H₃SiO₄⁻ ⇌ H₂SiO₄²⁻ + H⁺ (Sjöberg et al. 1985) */
-  silicic2: 13.2,
-  /** H₂O ⇌ H⁺ + OH⁻ */
-  water: 14.0,
-  /** HSO₄⁻ ⇌ SO₄²⁻ + H⁺ (only matters below pH ~3) */
-  bisulfate: 1.99,
-  /** B(OH)₃ + H₂O ⇌ B(OH)₄⁻ + H⁺ (the card's metaboric acid) */
-  boric: 9.24,
-} as const
-
-/** log10 Ksp (25 °C) of calcite, CaCO₃, screened at the bath's actual pH. */
-export const LOG_KSP_CALCITE = -8.48
-/** log10 Ksp (25 °C) of gypsum, CaSO₄·2H₂O. */
-export const LOG_KSP_GYPSUM = -4.58
-
-/**
- * Ionic strength (mol/L) of a profile: ½ Σ c z² over the modelled ions plus
- * the dosed acid's anion at its full charge. Feeds the Davies correction.
- */
-export function ionicStrength(
-  profile: IonProfile,
-  extras: WeakExtras = {},
-): number {
-  let i = 0
-  for (const ion of ION_ORDER) {
-    const z = IONS[ion].charge
-    i += mol(profile, ion) * z * z
-  }
-  for (const o of extras.organic ?? []) {
-    const z = o.pkas.length
-    i += o.mol * z * z
-  }
-  return i / 2
-}
-
-/**
- * Davies equation: log10 of the activity coefficient of an ion of charge z at
- * ionic strength I (mol/L), 25 °C. Good to I ≈ 0.5, which covers any bath.
- */
-export function daviesLogGamma(z: number, ionicStrengthMolar: number): number {
-  const sq = Math.sqrt(ionicStrengthMolar)
-  return -0.51 * z * z * (sq / (1 + sq) - 0.3 * ionicStrengthMolar)
-}
-
-/** log10 Ksp (25 °C) of the hydroxides screened. */
-export const LOG_KSP_HYDROXIDE = {
-  /** Mg(OH)₂, Ksp 5.6 × 10⁻¹² */
-  brucite: -11.25,
-  /** Ca(OH)₂, Ksp 5.0 × 10⁻⁶ */
-  portlandite: -5.3,
-} as const
-
-/** Temperature the silica solubility is evaluated at: a hot bath. */
+/** Temperature the bath chemistry is evaluated at: a hot bath. */
 export const BATH_TEMPERATURE_C = 40
+
+/**
+ * Acid dissociation constants (pKa) at the bath temperature, 40 °C. The 25 °C
+ * values are in the comments; the shift matters most for water itself
+ * (neutral pH is 6.77 at 40 °C) and for the alkaline checks.
+ */
+export const PKA = {
+  /** H₂CO₃ ⇌ HCO₃⁻ + H⁺ (6.35 at 25 °C; Plummer & Busenberg 1982) */
+  carbonic1: 6.3,
+  /** HCO₃⁻ ⇌ CO₃²⁻ + H⁺ (10.33 at 25 °C) */
+  carbonic2: 10.22,
+  /** H₄SiO₄ ⇌ H₃SiO₄⁻ + H⁺ (9.84 at 25 °C; Sjöberg et al. 1985) */
+  silicic1: 9.6,
+  /** H₃SiO₄⁻ ⇌ H₂SiO₄²⁻ + H⁺ (13.2 at 25 °C) */
+  silicic2: 12.9,
+  /** H₂O ⇌ H⁺ + OH⁻ (14.00 at 25 °C) */
+  water: 13.53,
+  /** HSO₄⁻ ⇌ SO₄²⁻ + H⁺ (1.99 at 25 °C; only matters below pH ~3) */
+  bisulfate: 2.1,
+  /** B(OH)₃ + H₂O ⇌ B(OH)₄⁻ + H⁺ (9.24 at 25 °C) */
+  boric: 9.08,
+} as const
+
+/** log10 Ksp at 40 °C of the hydroxides screened. */
+export const LOG_KSP_HYDROXIDE = {
+  /** Mg(OH)₂ (−11.25 at 25 °C) */
+  brucite: -11.7,
+  /** Ca(OH)₂ (−5.3 at 25 °C) */
+  portlandite: -5.45,
+} as const
+
+/** log10 Ksp at 40 °C of calcite, CaCO₃ (−8.48 at 25 °C; Plummer & Busenberg). */
+export const LOG_KSP_CALCITE = -8.58
+/** log10 Ksp at 40 °C of gypsum, CaSO₄·2H₂O (−4.58 at 25 °C). */
+export const LOG_KSP_GYPSUM = -4.61
+
+/**
+ * Metal–ligand stability constants, log10 K, at I ≈ 0.1 M (NIST 46 / Martell
+ * & Smith). Citrate holds calcium and magnesium strongly; lactate weakly.
+ * Temperature dependence over 25–40 °C is within the I-correction noise.
+ */
+export const LOG_K_COMPLEX = {
+  /** Ca²⁺ + Cit³⁻ ⇌ CaCit⁻ */
+  CaCit: 3.5,
+  /** Mg²⁺ + Cit³⁻ ⇌ MgCit⁻ */
+  MgCit: 3.4,
+  /** Na⁺ + Cit³⁻ ⇌ NaCit²⁻ */
+  NaCit: 0.8,
+  /** Ca²⁺ + HCit²⁻ ⇌ CaHCit */
+  CaHCit: 2.1,
+  /** Mg²⁺ + HCit²⁻ ⇌ MgHCit */
+  MgHCit: 1.8,
+  /** Ca²⁺ + Lac⁻ ⇌ CaLac⁺ */
+  CaLac: 1.1,
+  /** Mg²⁺ + Lac⁻ ⇌ MgLac⁺ */
+  MgLac: 0.9,
+} as const
 
 /**
  * Calcium / magnesium silicate hydrates have no single Ksp (they are
@@ -102,6 +106,9 @@ export const BATH_TEMPERATURE_C = 40
  * with both present, expect a white gel.
  */
 export const SILICATE_HYDRATE_PH = 10
+
+/** Debye–Hückel A parameter for the Davies equation at 40 °C (0.51 at 25 °C). */
+export const DAVIES_A = 0.524
 
 /**
  * log10 K for SiO₂(am) + 2 H₂O ⇌ H₄SiO₄ as a function of temperature,
@@ -123,7 +130,9 @@ function mol(profile: IonProfile, ion: IonId): number {
  * the anion that stays fully ionised at any bath pH (Cl⁻). Whatever is left
  * over must be balanced by the weak-acid anions (HCO₃⁻, CO₃²⁻, the silicate
  * anions, sulfate / bisulfate, the dosed acid's anion, borate) and water's
- * own OH⁻ / H⁺ — which is what fixes the pH.
+ * own OH⁻ / H⁺ — which is what fixes the pH. Calcium and magnesium count at
+ * their full charge here whether free or complexed; a complexed ligand is
+ * counted on the anion side at the charge it carries inside the complex.
  */
 export function strongIonDifference(profile: IonProfile): number {
   let s = 0
@@ -140,12 +149,21 @@ export function strongIonDifference(profile: IonProfile): number {
   return s
 }
 
+export type Ligand = 'citrate' | 'lactate' | 'other'
+
+export interface OrganicLigand {
+  /** Total mol/L of the ligand (all protonation states and complexes). */
+  mol: number
+  pkas: readonly number[]
+  ligand: Ligand
+}
+
 /**
  * Weak systems in the bath that are not modelled ions: the dosed acid's own
  * anion (lactate, citrate) and the card's boron. All amounts in mol/L.
  */
 export interface WeakExtras {
-  organic?: readonly { mol: number; pkas: readonly number[] }[]
+  organic?: readonly OrganicLigand[]
   boronMol?: number
 }
 
@@ -186,10 +204,15 @@ export interface Speciation {
   sio3: number
   hso4: number
   so4: number
-  /** Charge equivalents (mol/L) carried by the dosed acid's anion. */
+  /** Charge equivalents (mol/L) carried by the dosed acid's anion, free or complexed. */
   organicEq: number
   /** Borate B(OH)₄⁻ from the card's boron. */
   borate: number
+  /** Calcium / magnesium not bound by the acid's anion (= total when no organic acid). */
+  caFree: number
+  mgFree: number
+  caBound: number
+  mgBound: number
 }
 
 /** Fractions of a diprotic acid's three forms at [H⁺] = h. */
@@ -204,9 +227,21 @@ function diproticFractions(
   return [(h * h) / d, (k1 * h) / d, (k1 * k2) / d]
 }
 
+const K = {
+  CaCit: 10 ** LOG_K_COMPLEX.CaCit,
+  MgCit: 10 ** LOG_K_COMPLEX.MgCit,
+  NaCit: 10 ** LOG_K_COMPLEX.NaCit,
+  CaHCit: 10 ** LOG_K_COMPLEX.CaHCit,
+  MgHCit: 10 ** LOG_K_COMPLEX.MgHCit,
+  CaLac: 10 ** LOG_K_COMPLEX.CaLac,
+  MgLac: 10 ** LOG_K_COMPLEX.MgLac,
+}
+
 /**
- * Distribute the profile's total carbonate and total silica over their acid /
- * base forms at the given pH (activity = concentration).
+ * Distribute the profile's total carbonate, silica, sulfate, boron and the
+ * dosed acid's anion over their acid / base forms at the given pH, and solve
+ * the calcium / magnesium / sodium complexation by citrate and lactate as a
+ * fixed point (activity = concentration).
  */
 export function speciate(
   profile: IonProfile,
@@ -221,12 +256,78 @@ export function speciate(
   const [c0, c1, c2] = diproticFractions(h, PKA.carbonic1, PKA.carbonic2)
   const [s0, s1, s2] = diproticFractions(h, PKA.silicic1, PKA.silicic2)
   const [b0, b1] = polyproticFractions(h, [PKA.bisulfate])
-  let organicEq = 0
-  for (const o of extras.organic ?? []) {
-    organicEq += o.mol * anionEquivalents(h, o.pkas)
-  }
   const borate =
     (extras.boronMol ?? 0) * polyproticFractions(h, [PKA.boric])[1]
+
+  const caT = mol(profile, 'Ca')
+  const mgT = mol(profile, 'Mg')
+  const na = mol(profile, 'Na')
+  let caF = caT
+  let mgF = mgT
+  let organicEq = 0
+
+  let citT = 0
+  let citPkas: readonly number[] = []
+  let lacT = 0
+  let lacPkas: readonly number[] = []
+  for (const o of extras.organic ?? []) {
+    if (o.ligand === 'citrate') {
+      citT += o.mol
+      citPkas = o.pkas
+    } else if (o.ligand === 'lactate') {
+      lacT += o.mol
+      lacPkas = o.pkas
+    } else organicEq += o.mol * anionEquivalents(h, o.pkas)
+  }
+
+  if (citT > 0 || lacT > 0) {
+    const fc = citT > 0 ? polyproticFractions(h, citPkas) : [1, 0, 0, 0]
+    const fl = lacT > 0 ? polyproticFractions(h, lacPkas) : [1, 0]
+    let cit3 = 0
+    let hcit = 0
+    let lacF = 0
+    for (let i = 0; i < 200; i++) {
+      if (citT > 0) {
+        const d =
+          1 / fc[3] +
+          K.CaCit * caF +
+          K.MgCit * mgF +
+          K.NaCit * na +
+          (K.CaHCit * caF + K.MgHCit * mgF) * (fc[2] / fc[3])
+        cit3 = citT / d
+        hcit = (cit3 * fc[2]) / fc[3]
+      }
+      if (lacT > 0) {
+        lacF = lacT / (1 / fl[1] + K.CaLac * caF + K.MgLac * mgF)
+      }
+      const caNew = caT / (1 + K.CaCit * cit3 + K.CaHCit * hcit + K.CaLac * lacF)
+      const mgNew = mgT / (1 + K.MgCit * cit3 + K.MgHCit * hcit + K.MgLac * lacF)
+      const done =
+        Math.abs(caNew - caF) < 1e-13 && Math.abs(mgNew - mgF) < 1e-13
+      caF = caNew
+      mgF = mgNew
+      if (done) break
+    }
+    const caCit = K.CaCit * caF * cit3
+    const mgCit = K.MgCit * mgF * cit3
+    const naCit = K.NaCit * na * cit3
+    const caHCit = K.CaHCit * caF * hcit
+    const mgHCit = K.MgHCit * mgF * hcit
+    const caLac = K.CaLac * caF * lacF
+    const mgLac = K.MgLac * mgF * lacF
+    if (citT > 0) {
+      const citU = cit3 / fc[3] // uncomplexed citrate, all protonation states
+      organicEq +=
+        citU * (fc[1] + 2 * fc[2] + 3 * fc[3]) +
+        3 * (caCit + mgCit + naCit) +
+        2 * (caHCit + mgHCit)
+    }
+    if (lacT > 0) {
+      const lacU = lacF / fl[1]
+      organicEq += lacU * fl[1] + caLac + mgLac
+    }
+  }
+
   return {
     h,
     oh,
@@ -240,6 +341,10 @@ export function speciate(
     so4: sT * b1,
     organicEq,
     borate,
+    caFree: caF,
+    mgFree: mgF,
+    caBound: caT - caF,
+    mgBound: mgT - mgF,
   }
 }
 
@@ -270,8 +375,8 @@ export function protonBalance(
 
 /**
  * Estimate the pH of a result profile by bisection on the proton balance.
- * Pure water (or any balanced strong-electrolyte solution) returns 7.0.
- * Clamped to 0–14.
+ * Pure water returns the neutral point at the bath temperature (6.77 at
+ * 40 °C). Clamped to 0–14.
  */
 export function estimateBathPh(
   profile: IonProfile,
@@ -287,6 +392,28 @@ export function estimateBathPh(
     else hi = mid
   }
   return (lo + hi) / 2
+}
+
+/**
+ * Where the pH drifts once the dissolved CO₂ has left an open tub: strip the
+ * carbonic acid, re-balance, repeat until nothing volatile is left. In a
+ * still bath this takes hours (gas-transfer velocity ~2 cm/h over ~25 cm of
+ * water); jets or stirring make it much faster.
+ */
+export function phAfterDegassing(
+  profile: IonProfile,
+  extras: WeakExtras = {},
+): number {
+  let p: IonProfile = { ...profile }
+  let ph = estimateBathPh(p, extras)
+  for (let i = 0; i < 8; i++) {
+    const s = speciate(p, ph, extras)
+    if (s.h2co3 < 1e-9) break
+    const dic = s.hco3 + s.co3
+    p = { ...p, HCO3: dic * 1000 * IONS.HCO3.molarMass, CO3: 0 }
+    ph = estimateBathPh(p, extras)
+  }
+  return ph
 }
 
 /** Boron on the card (metaboric / boric acid lines), mol/L, for the proton balance. */
@@ -306,6 +433,10 @@ export interface AcidAddition {
   extras: WeakExtras
 }
 
+function ligandOf(key: string): Ligand {
+  return key === 'citrate' || key === 'lactate' ? key : 'other'
+}
+
 /** The bath with `mmolPerL` of the acid added to `profile` + `extras`. */
 export function withAcid(
   profile: IonProfile,
@@ -323,7 +454,11 @@ export function withAcid(
   }
   const organic = [...(extras.organic ?? [])]
   if (salt.acidAnion && mmolPerL > 0) {
-    organic.push({ mol: mmolPerL / 1000, pkas: salt.acidAnion.pkas })
+    organic.push({
+      mol: mmolPerL / 1000,
+      pkas: salt.acidAnion.pkas,
+      ligand: ligandOf(salt.acidAnion.key),
+    })
   }
   const merged: WeakExtras = { organic }
   if (extras.boronMol !== undefined) merged.boronMol = extras.boronMol
@@ -401,10 +536,10 @@ export interface CardAcidity {
 }
 
 /**
- * The free acidity the bath should end up with. Analysis sheets print the
- * hydrogen-ion (H⁺) and hydroxide (OH⁻) rows explicitly; those win. Failing
- * that the card pH gives it (10⁻ᵖᴴ − 10ᵖᴴ⁻¹⁴, only material outside pH 5–9).
- * With neither, zero: cancel exactly what the salts release.
+ * The free acidity the card reports, for reference. Analysis sheets print
+ * the hydrogen-ion (H⁺) and hydroxide (OH⁻) rows explicitly; those win.
+ * Failing that the card pH gives it (10⁻ᵖᴴ − 10ᵖᴴ⁻ᵖᴷʷ, only material outside
+ * pH 5–9). With neither, zero.
  */
 export function cardAcidity(norm: NormalizedOnsen): CardAcidity {
   const h = norm.notReplicated.find((n) => n.key === 'H')?.mgPerL
@@ -422,6 +557,36 @@ export function cardAcidity(norm: NormalizedOnsen): CardAcidity {
     }
   }
   return { meqPerL: 0, basis: 'none' }
+}
+
+/**
+ * Ionic strength (mol/L) of a profile: ½ Σ c z² over the modelled ions plus
+ * the dosed acid's anion at its full charge. Feeds the Davies correction.
+ */
+export function ionicStrength(
+  profile: IonProfile,
+  extras: WeakExtras = {},
+): number {
+  let i = 0
+  for (const ion of ION_ORDER) {
+    const z = IONS[ion].charge
+    i += mol(profile, ion) * z * z
+  }
+  for (const o of extras.organic ?? []) {
+    const z = o.pkas.length
+    i += o.mol * z * z
+  }
+  return i / 2
+}
+
+/**
+ * Davies equation: log10 of the activity coefficient of an ion of charge z at
+ * ionic strength I (mol/L), at the bath temperature. Good to I ≈ 0.5, which
+ * covers any bath.
+ */
+export function daviesLogGamma(z: number, ionicStrengthMolar: number): number {
+  const sq = Math.sqrt(ionicStrengthMolar)
+  return -DAVIES_A * z * z * (sq / (1 + sq) - 0.3 * ionicStrengthMolar)
 }
 
 export type PrecipitateMineral =
@@ -444,10 +609,11 @@ const sign = (n: number): string => (n >= 0 ? '+' : '')
 /**
  * What falls out of a result profile at its estimated pH: gypsum, calcite
  * (carbonate speciated at that pH), brucite, portlandite, calcium/magnesium
- * silicate hydrate and amorphous silica. Ionic saturation indices use Davies
- * activity coefficients at the bath's ionic strength, so a hard, salty bath
- * is not flagged just for being concentrated; the pH itself is still
- * estimated with activity = concentration.
+ * silicate hydrate and amorphous silica. Ionic saturation indices use the
+ * FREE calcium and magnesium (what citrate or lactate has not bound) and
+ * Davies activity coefficients at the bath's ionic strength, so a hard,
+ * salty bath is not flagged just for being concentrated; the pH itself is
+ * still estimated with activity = concentration.
  */
 export function precipitationWarnings(
   profile: IonProfile,
@@ -457,13 +623,17 @@ export function precipitationWarnings(
 ): PrecipitationWarning[] {
   const out: PrecipitationWarning[] = []
   const s = speciate(profile, ph, extras)
-  const mg = mol(profile, 'Mg')
-  const ca = mol(profile, 'Ca')
-  const so4 = mol(profile, 'SO4')
+  const mg = s.mgFree
+  const ca = s.caFree
+  const so4 = s.so4
   const siT = mol(profile, 'H2SiO3')
   const I = ionicStrength(profile, extras)
   const lg1 = daviesLogGamma(1, I)
   const lg2 = daviesLogGamma(2, I)
+  const bound =
+    s.caBound > 0
+      ? `, free Ca after ${((s.caBound / (s.caBound + s.caFree)) * 100).toFixed(0)}% is bound by the acid's anion`
+      : ''
 
   if (ca > 0 && so4 > 0) {
     const si = Math.log10(ca * so4) + 2 * lg2 - LOG_KSP_GYPSUM
@@ -471,17 +641,20 @@ export function precipitationWarnings(
       out.push({
         mineral: 'gypsum',
         saturationIndex: si,
-        message: `Gypsum CaSO₄ is at or above saturation (SI ${sign(si)}${si.toFixed(1)}, Davies-corrected at I = ${I.toFixed(3)} M): some calcium sulfate may not dissolve.`,
+        message: `Gypsum CaSO₄ is at or above saturation (SI ${sign(si)}${si.toFixed(1)}, Davies-corrected at I = ${I.toFixed(3)} M${bound}): some calcium sulfate may not dissolve.`,
       })
     }
   }
   if (ca > 0 && s.co3 > 0) {
     const si = Math.log10(ca * s.co3) + 2 * lg2 - LOG_KSP_CALCITE
     if (si >= 0) {
+      const mild = si < 0.3
       out.push({
         mineral: 'calcite',
         saturationIndex: si,
-        message: `Calcite CaCO₃ is supersaturated at the estimated pH ${ph.toFixed(1)} (SI ${sign(si)}${si.toFixed(1)}, carbonate speciated at that pH, Davies-corrected at I = ${I.toFixed(3)} M): expect calcium carbonate haze or scale; a lower pH holds more of the carbonate as bicarbonate and keeps it dissolved.`,
+        message: mild
+          ? `Calcite CaCO₃ is right at saturation at the estimated pH ${ph.toFixed(1)} (SI ${sign(si)}${si.toFixed(1)}, carbonate speciated at that pH, Davies-corrected at I = ${I.toFixed(3)} M${bound}): stable while the dissolved CO₂ stays in; a faint film or scale forms as the CO₂ leaves and the pH climbs — the same travertine the spring itself lays down.`
+          : `Calcite CaCO₃ is supersaturated at the estimated pH ${ph.toFixed(1)} (SI ${sign(si)}${si.toFixed(1)}, carbonate speciated at that pH, Davies-corrected at I = ${I.toFixed(3)} M${bound}): expect calcium carbonate haze or scale; a lower pH holds more of the carbonate as bicarbonate and keeps it dissolved.`,
       })
     }
   }
