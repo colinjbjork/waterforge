@@ -511,7 +511,7 @@ function buildVariant(
     if (m.ion === 'CO2') {
       if (m.target > 0 && m.diffPct !== null && Math.abs(m.diffPct) > 10) {
         warnings.push(
-          `Dissolved CO₂: ${m.result.toFixed(0)} mg/L modelled vs ${m.target.toFixed(0)} mg/L on the card (${pct(m.diffPct)}). It is not fitted: at the card pH and bicarbonate it can only be this much (carbonic acid pKa 6.35 at 25 °C), so the card's own pH, bicarbonate and free-CO₂ figures do not quite agree with each other; pH and bicarbonate were kept.`,
+          `Dissolved CO₂: ${m.result.toFixed(0)} mg/L modelled vs ${m.target.toFixed(0)} mg/L on the card (${pct(m.diffPct)}). It is not fitted: at the card pH and bicarbonate it can only be this much (carbonic acid pKa 6.30 at 40 °C), so the card's own pH, bicarbonate and free-CO₂ figures do not quite agree with each other; pH and bicarbonate were kept.`,
         )
       }
       continue
