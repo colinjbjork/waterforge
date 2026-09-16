@@ -61,30 +61,43 @@ describe('salt charge balance', () => {
   // A dissolved salt is electrically neutral: the signed charges of the ions it
   // releases must sum to zero. This invariant guards every salt's stoichiometry
   // — e.g. it catches modelling CaCO3 as Ca + 1 HCO3 rather than Ca + 2 HCO3.
-  // The onsen fork's sodium metasilicate and hydrochloric acid are the
-  // declared exceptions: the counter-ion is water's own (OH⁻ or H⁺), which is
-  // not a modelled ion, so they declare `netCharge` (+2 and −1) and the onsen
-  // layer accounts for it. Every other salt must still be zero.
+  // The onsen fork's sodium metasilicate and the bath acids are the declared
+  // exceptions: the counter-ion is water's own (OH⁻ or H⁺), which is not a
+  // modelled ion, so they declare `netCharge` (+2, −1, −3) and the onsen layer
+  // accounts for it. An organic acid's anion (lactate, citrate) is not a
+  // modelled ion either and is declared via `acidAnion`; its charge plus the
+  // stoichiometry's must sum to the net charge. Every other salt must be zero.
   it('every salt releases ions that sum to its declared net charge (zero unless stated)', () => {
     for (const id of Object.keys(SALTS) as (keyof typeof SALTS)[]) {
       let charge = 0
       for (const [ion, moles] of Object.entries(SALTS[id].stoichiometry)) {
         charge += IONS[ion as keyof typeof IONS].charge * (moles ?? 0)
       }
+      charge += SALTS[id].acidAnion?.charge ?? 0
       expect(charge, `${id} should be charge-balanced`).toBe(
         SALTS[id].netCharge ?? 0,
       )
     }
   })
 
-  it('only sodium metasilicate (in the palette) and the acid declare a net charge', () => {
+  it('only sodium metasilicate (in the palette) and the acids declare a net charge', () => {
     const inPalette = SALT_ORDER.filter((id) => SALTS[id].netCharge)
     expect(inPalette).toEqual(['sodiumMetasilicate'])
     expect(SALTS.sodiumMetasilicate.netCharge).toBe(+2)
     const all = (Object.keys(SALTS) as (keyof typeof SALTS)[]).filter(
       (id) => SALTS[id].netCharge,
     )
-    expect(all.sort()).toEqual(['hydrochloricAcid', 'sodiumMetasilicate'])
+    expect(all.sort()).toEqual([
+      'citricAcid',
+      'hydrochloricAcid',
+      'lacticAcid',
+      'sodiumBisulfate',
+      'sodiumMetasilicate',
+    ])
     expect(SALTS.hydrochloricAcid.netCharge).toBe(-1)
+    expect(SALTS.lacticAcid.netCharge).toBe(-1)
+    expect(SALTS.citricAcid.netCharge).toBe(-3)
+    expect(SALTS.sodiumBisulfate.netCharge).toBe(-1)
+    expect(SALTS.sodiumBisulfate.stoichiometry).toEqual({ Na: 1, SO4: 1 })
   })
 })

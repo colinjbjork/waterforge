@@ -12,7 +12,11 @@ import {
   validateOnsenInput,
 } from './index'
 import type { OnsenInput } from './index'
-import { IONS, SALTS } from '../chem'
+import {
+  ACIDS,
+  IONS,
+  SALTS,
+} from '../chem/constants'
 import { forward } from '../solver/matrix'
 import { LITRES_PER_US_GALLON } from '../chem/conversions'
 
@@ -300,15 +304,27 @@ describe('alkaline card: sodium carbonate + baking soda', () => {
         anions: { HCO3: profile.HCO3!, CO3: profile.CO3! },
       }),
     )
+    // Total carbon is fitted; the HCO3/CO3 split is reported as speciated at
+    // the card pH, which (pKa 10.33) holds less carbonate than the forward
+    // model's nominal salt split.
     const co3 = r.match.find((m) => m.ion === 'CO3')!
-    expect(co3.result).toBeCloseTo(profile.CO3!, 6)
-    expect(r.recipe.map((x) => x.saltId).sort()).toEqual([
+    const hco3 = r.match.find((m) => m.ion === 'HCO3')!
+    const carbonMol =
+      hco3.result / IONS.HCO3.molarMass + co3.result / IONS.CO3.molarMass
+    const cardCarbonMol =
+      profile.HCO3! / IONS.HCO3.molarMass + profile.CO3! / IONS.CO3.molarMass
+    expect(carbonMol).toBeCloseTo(cardCarbonMol, 2)
+    expect(co3.result / hco3.result).toBeCloseTo(
+      (10 ** (9.5 - 10.33) * IONS.CO3.molarMass) / IONS.HCO3.molarMass,
+      3,
+    )
+    expect(r.recipe.map((x) => x.saltId).filter((id) => !ACIDS.includes(id)).sort()).toEqual([
       'bakingSoda',
       'sodiumCarbonate',
     ])
-    expect(r.readouts.phEstimate).toBeDefined()
-    // No silicate on the card → no hydroxide to cancel → no acid line.
-    expect(r.readouts.acid).toBeUndefined()
+    // The salts alone sit a touch above 9.5, so a whisker of acid is dosed.
+    expect(r.readouts.phEstimate).toBeCloseTo(9.5, 2)
+    expect(r.readouts.acid?.mmolPerL ?? 0).toBeLessThan(0.5)
     expect(r.readouts.cardPh).toBe(9.5)
     const md = renderMarkdown(r)
     expect(md).toMatch(/Approximate pH ≈ \d+\.\d/)

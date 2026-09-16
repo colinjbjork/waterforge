@@ -33,8 +33,11 @@ export type SaltId =
   | 'sodiumSulfate'
   | 'potassiumChloride'
   | 'sodiumMetasilicate'
-  // Bath-only acid (never in SALT_ORDER; see `ACIDS`).
+  // Bath-only acids (never in SALT_ORDER; see `ACIDS`).
   | 'hydrochloricAcid'
+  | 'lacticAcid'
+  | 'citricAcid'
+  | 'sodiumBisulfate'
 
 // Atomic / elemental weights (g/mol). Standard atomic weights at the precision
 // the source method uses; group weights below are summed from these.
@@ -89,6 +92,28 @@ export const MURIATIC_ACID_MASS_FRACTION = 0.145
 export const MURIATIC_ACID_DENSITY_G_PER_ML = 1.07
 /** Grams of 14.5 % muriatic acid that carry one mole of HCl. */
 export const MURIATIC_ACID_WEIGHT = HCL_WEIGHT / MURIATIC_ACID_MASS_FRACTION // 251.4
+
+// Food-grade lactic acid is sold as an 88 % w/w solution (density ≈ 1.20 g/mL
+// at 20 °C). Monoprotic, pKa 3.86; its anion, lactate, is not an onsen ion.
+export const LACTIC_ACID_WEIGHT =
+  3 * ATOMIC_WEIGHTS.C + 6 * ATOMIC_WEIGHTS.H + 3 * ATOMIC_WEIGHTS.O // 90.078
+export const LACTATE_WEIGHT = LACTIC_ACID_WEIGHT - ATOMIC_WEIGHTS.H // 89.07
+export const LACTIC_ACID_MASS_FRACTION = 0.88
+export const LACTIC_ACID_DENSITY_G_PER_ML = 1.2
+/** Grams of 88 % lactic acid that carry one mole of acid. */
+export const LACTIC_ACID_SOLUTION_WEIGHT =
+  LACTIC_ACID_WEIGHT / LACTIC_ACID_MASS_FRACTION // 102.36
+
+// Food-grade citric acid, anhydrous powder (the usual retail form; the
+// monohydrate is 9 % heavier per mole — swap the weight if the bag says so).
+// Triprotic, pKa 3.13 / 4.76 / 6.40; citrate is not an onsen ion.
+export const CITRIC_ACID_WEIGHT =
+  6 * ATOMIC_WEIGHTS.C + 8 * ATOMIC_WEIGHTS.H + 7 * ATOMIC_WEIGHTS.O // 192.12
+export const CITRATE_WEIGHT = CITRIC_ACID_WEIGHT - 3 * ATOMIC_WEIGHTS.H // 189.1
+
+// Sodium bisulfate, anhydrous granules (pool "pH decreaser" / "dry acid").
+// One proton per mole (HSO₄⁻ pKa 1.99); leaves Na⁺ and SO₄²⁻, both onsen ions.
+export const NAHSO4_WEIGHT = ATOMIC_WEIGHTS.Na + ATOMIC_WEIGHTS.H + SO4_WEIGHT // 120.05
 
 /** Molar mass of CaCO3, the reference compound for alkalinity expressed as-CaCO3. */
 export const CACO3_MOLAR_MASS = CACO3_WEIGHT
@@ -165,6 +190,25 @@ export interface Salt {
    * print a volume next to the gram dose. Omitted for solids.
    */
   readonly densityGPerMl?: number
+  /**
+   * For an acid whose anion is NOT a modelled ion (lactate, citrate): the
+   * anion released per mole, so the onsen layer can put it in the proton
+   * balance and report it as a by-product. Its charge is the fully
+   * deprotonated value; `pkas` are the acid's dissociation constants.
+   */
+  readonly acidAnion?: AcidAnion
+  /** Handling / safety note for the report (acids). */
+  readonly handling?: string
+}
+
+export interface AcidAnion {
+  readonly key: string
+  readonly label: string
+  readonly formula: string
+  readonly molarMass: number
+  /** Charge of the fully deprotonated anion (negative). */
+  readonly charge: number
+  readonly pkas: readonly number[]
 }
 
 export const SALTS: Record<SaltId, Salt> = {
@@ -321,6 +365,62 @@ export const SALTS: Record<SaltId, Salt> = {
     stoichiometry: { Cl: 1 },
     netCharge: -1,
     densityGPerMl: MURIATIC_ACID_DENSITY_G_PER_ML,
+    handling:
+      'Corrosive liquid with fumes: gloves and eye protection; add the acid to the bath water, never water to acid; never mix it with the metasilicate concentrate. A full-strength 31.45% jug needs only 0.43× the volume.',
+  },
+  lacticAcid: {
+    id: 'lacticAcid',
+    purchaseName: 'lactic acid, food grade (88% solution)',
+    name: 'Lactic acid, 88% solution',
+    formula: 'C3H6O3 (88% aq)',
+    molarMass: LACTIC_ACID_SOLUTION_WEIGHT,
+    // Lactate is not a modelled ion: declared via `acidAnion`; one H⁺ per mole.
+    stoichiometry: {},
+    netCharge: -1,
+    densityGPerMl: LACTIC_ACID_DENSITY_G_PER_ML,
+    acidAnion: {
+      key: 'lactate',
+      label: 'lactate (C₃H₅O₃⁻)',
+      formula: 'C3H5O3-',
+      molarMass: LACTATE_WEIGHT,
+      charge: -1,
+      pkas: [3.86],
+    },
+    handling:
+      'Food-grade but concentrated: gloves, avoid eyes; a mild acid with no fumes. Stir into the bath water before the other salts.',
+  },
+  citricAcid: {
+    id: 'citricAcid',
+    purchaseName: 'citric acid, food grade (anhydrous powder)',
+    name: 'Citric acid, anhydrous',
+    formula: 'C6H8O7',
+    molarMass: CITRIC_ACID_WEIGHT,
+    // Citrate is not a modelled ion: declared via `acidAnion`; three H⁺ per mole.
+    stoichiometry: {},
+    netCharge: -3,
+    acidAnion: {
+      key: 'citrate',
+      label: 'citrate (C₆H₅O₇³⁻)',
+      formula: 'C6H5O7 3-',
+      molarMass: CITRATE_WEIGHT,
+      charge: -3,
+      pkas: [3.13, 4.76, 6.4],
+    },
+    handling:
+      'Food-grade powder; keep dust out of eyes. Dissolve in the bath water before the other salts (it fizzes against bicarbonate: that is the CO₂ being made). Citrate binds part of the calcium and magnesium as soluble complexes, so the water feels a little softer than the card and scales less; if the bag says monohydrate, use 9% more.',
+  },
+  sodiumBisulfate: {
+    id: 'sodiumBisulfate',
+    purchaseName: 'sodium bisulfate (pool pH decreaser / "dry acid", anhydrous)',
+    name: 'Sodium bisulfate',
+    formula: 'NaHSO4',
+    molarMass: NAHSO4_WEIGHT,
+    // Na⁺ + SO₄²⁻ + one H⁺ per mole; both ions are modelled, so they are
+    // credited to the fit like the muriatic acid's chloride.
+    stoichiometry: { Na: 1, SO4: 1 },
+    netCharge: -1,
+    handling:
+      'Solid, no fumes, but an irritant once wet: gloves, keep dry until use. Dissolve in the bath water before the other salts. Adds sodium and sulfate that the recipe credits against the card; it only suits sulfate-rich springs.',
   },
 }
 
@@ -329,7 +429,12 @@ export const SALTS: Record<SaltId, Salt> = {
  * SALT_ORDER, so neither the solver's recipe policy (ADR 0009) nor the
  * drinking-water UI ever sees them.
  */
-export const ACIDS: readonly SaltId[] = ['hydrochloricAcid']
+export const ACIDS: readonly SaltId[] = [
+  'hydrochloricAcid',
+  'lacticAcid',
+  'citricAcid',
+  'sodiumBisulfate',
+]
 
 /** Stable iteration order for salts (the source method's dosing priority). */
 export const SALT_ORDER: readonly SaltId[] = [

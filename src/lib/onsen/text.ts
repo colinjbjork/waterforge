@@ -3,10 +3,16 @@
 // This is what a person reads in a terminal. Every table has straight-line
 // borders (Unicode box drawing) with padded, aligned columns — an Excel-style
 // grid — instead of a markdown pipe table, which is unreadable un-rendered.
+// One recipe block per acid, after a summary table of the acid options.
 
 import { speciesLabel } from './species'
-import { liquidLines } from './report'
-import type { OnsenResult } from './report'
+import {
+  ACID_SHORT_NAME,
+  ACID_SUMMARY_HEADER,
+  acidSummaryRows,
+  liquidLines,
+} from './report'
+import type { OnsenResult, OnsenVariant } from './report'
 import type { NotReplicated } from './types'
 
 type Align = 'left' | 'right'
@@ -71,6 +77,67 @@ function reasonText(n: NotReplicated): string {
   }
 }
 
+function renderVariant(
+  v: OnsenVariant,
+  index: number,
+  total: number,
+  lines: string[],
+): void {
+  lines.push(
+    `=== RECIPE ${index + 1} of ${total}: ${ACID_SHORT_NAME[v.acid].toUpperCase()} ===`,
+  )
+  lines.push('')
+  lines.push('RECIPE')
+  if (v.recipe.length === 0) {
+    lines.push(
+      'No salt needed: the source water already meets or exceeds every fitted ion.',
+    )
+  } else {
+    lines.push(
+      boxTable(
+        ['Ingredient', 'Formula', 'Grams for bath', 'g/L'],
+        v.recipe.map((x) => [
+          x.purchaseName,
+          x.formula,
+          fmt(x.grams, 1),
+          fmt(x.gramsPerLitre, 3),
+        ]),
+        ['left', 'left', 'right', 'right'],
+      ),
+    )
+    for (const l of liquidLines(v.recipe)) lines.push(l)
+  }
+  lines.push('')
+
+  lines.push('MATCH')
+  const rows = v.match.map((m) => [
+    m.label,
+    fmt(m.target, 1),
+    fmt(m.result, 1),
+    m.diffPct === null
+      ? 'n/a (not on card)'
+      : `${m.diffPct >= 0 ? '+' : ''}${fmt(m.diffPct, 1)}%`,
+  ])
+  for (const e of v.extraIons) {
+    rows.push([`${e.label} (from the acid)`, '-', fmt(e.mgPerL, 1), 'not an onsen ion'])
+  }
+  lines.push(
+    boxTable(
+      ['Ion', 'Target mg/L', 'Result mg/L', 'Difference'],
+      rows,
+      ['left', 'right', 'right', 'right'],
+    ),
+  )
+  lines.push(
+    `TDS of result ${fmt(v.readouts.tds, 0)} mg/L. Sulfate:chloride ${isFinite(v.readouts.sulfateChlorideRatio) ? fmt(v.readouts.sulfateChlorideRatio, 2) : 'infinite'}. Estimated pH ${fmt(v.readouts.phEstimate, 1)}${v.readouts.cardPh !== undefined ? ` (card ${v.readouts.cardPh})` : ''}.`,
+  )
+  lines.push('')
+
+  lines.push('WARNINGS')
+  for (const w of v.warnings) lines.push(`- ${w}`)
+  lines.push('')
+}
+
 /** Render an `OnsenResult` as bordered plain text (the CLI default). */
 export function renderText(r: OnsenResult): string {
   const lines: string[] = []
@@ -86,49 +153,25 @@ export function renderText(r: OnsenResult): string {
   )
   lines.push('')
 
-  lines.push('RECIPE')
-  if (r.recipe.length === 0) {
-    lines.push(
-      'No salt needed: the source water already meets or exceeds every fitted ion.',
-    )
-  } else {
-    lines.push(
-      boxTable(
-        ['Ingredient', 'Formula', 'Grams for bath', 'g/L'],
-        r.recipe.map((x) => [
-          x.purchaseName,
-          x.formula,
-          fmt(x.grams, 1),
-          fmt(x.gramsPerLitre, 3),
-        ]),
-        ['left', 'left', 'right', 'right'],
-      ),
-    )
-    for (const l of liquidLines(r)) lines.push(l)
-  }
-  lines.push('')
-
-  lines.push('MATCH')
+  lines.push(`ACID OPTIONS (${r.variants.length} recipes below, one per acid)`)
   lines.push(
-    boxTable(
-      ['Ion', 'Target mg/L', 'Result mg/L', 'Difference'],
-      r.match.map((m) => [
-        m.label,
-        fmt(m.target, 1),
-        fmt(m.result, 1),
-        m.diffPct === null
-          ? 'n/a (not on card)'
-          : `${m.diffPct >= 0 ? '+' : ''}${fmt(m.diffPct, 1)}%`,
-      ]),
-      ['left', 'right', 'right', 'right'],
-    ),
+    boxTable(ACID_SUMMARY_HEADER, acidSummaryRows(r), [
+      'left',
+      'right',
+      'right',
+      'right',
+      'left',
+      'left',
+    ]),
   )
   lines.push(
-    `TDS of result ${fmt(r.readouts.tds, 0)} mg/L. Sulfate:chloride ${isFinite(r.readouts.sulfateChlorideRatio) ? fmt(r.readouts.sulfateChlorideRatio, 2) : 'infinite'}. Estimated pH ${fmt(r.readouts.phEstimate, 1)}${r.readouts.cardPh !== undefined ? ` (card ${r.readouts.cardPh})` : ''}.`,
+    `* suggested: ${ACID_SHORT_NAME[r.suggested]} (composition first, then precipitation, then closeness to the card pH).`,
   )
   lines.push('')
 
-  lines.push('NOT REPLICATED')
+  r.variants.forEach((v, i) => renderVariant(v, i, r.variants.length, lines))
+
+  lines.push('NOT REPLICATED (same for every recipe)')
   if (r.notReplicated.length === 0) {
     lines.push('Every component on the card is a fit target.')
   } else {
@@ -147,8 +190,9 @@ export function renderText(r: OnsenResult): string {
   }
   lines.push('')
 
-  lines.push('WARNINGS')
-  for (const w of r.warnings) lines.push(`- ${w}`)
+  lines.push('GENERAL WARNINGS (apply to every recipe)')
+  if (r.sharedWarnings.length === 0) lines.push('- none')
+  for (const w of r.sharedWarnings) lines.push(`- ${w}`)
   lines.push('')
   return lines.join('\n')
 }

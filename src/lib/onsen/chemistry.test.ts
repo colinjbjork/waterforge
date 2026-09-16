@@ -3,8 +3,10 @@ import {
   acidReleased,
   amorphousSilicaLogK,
   cardAcidity,
+  daviesLogGamma,
   estimateBathPh,
   hydroxideReleased,
+  ionicStrength,
   precipitationWarnings,
   protonBalance,
   speciate,
@@ -120,12 +122,21 @@ describe('hydroxide and acid from doses', () => {
     ).toBe(0)
   })
 
-  it('acids are defined as the retail solution, sit outside SALT_ORDER, and carry a negative net charge', () => {
+  it('acids are defined as the retail product, sit outside SALT_ORDER, and carry a negative net charge', () => {
     for (const id of ACIDS) {
       expect(SALT_ORDER).not.toContain(id)
       expect(SALTS[id].netCharge).toBeLessThan(0)
-      expect(SALTS[id].densityGPerMl).toBeGreaterThan(0)
+      expect(SALTS[id].handling?.length ?? 0).toBeGreaterThan(0)
     }
+    // Liquids carry a density; the two powders do not.
+    expect(SALTS.hydrochloricAcid.densityGPerMl).toBeGreaterThan(0)
+    expect(SALTS.lacticAcid.densityGPerMl).toBeGreaterThan(0)
+    expect(SALTS.citricAcid.densityGPerMl).toBeUndefined()
+    expect(SALTS.sodiumBisulfate.densityGPerMl).toBeUndefined()
+    // 88 % w/w lactic acid: one mole (90.08 g) in 102.4 g of solution.
+    expect(SALTS.lacticAcid.molarMass).toBeCloseTo(90.078 / 0.88, 2)
+    expect(SALTS.citricAcid.molarMass).toBeCloseTo(192.12, 1)
+    expect(SALTS.sodiumBisulfate.molarMass).toBeCloseTo(120.05, 1)
     // 14.5 % w/w: one mole of HCl (36.46 g) in 251.4 g of solution.
     expect(SALTS.hydrochloricAcid.molarMass).toBeCloseTo(36.458 / 0.145, 2)
   })
@@ -182,14 +193,19 @@ describe('precipitation checks', () => {
     expect(cold).not.toContain('portlandite')
   })
 
-  it('brucite SI follows log10([Mg][OH]²) + 11.25', () => {
+  it('brucite SI follows log10([Mg][OH]²) + 11.25 with Davies activity coefficients', () => {
     const w = precipitationWarnings({ Mg: 5.5 }, 11.7).find(
       (x) => x.mineral === 'brucite',
     )!
     const mgMol = 5.5 / IONS.Mg.molarMass / 1000
     const oh = 10 ** (11.7 - 14)
+    const I = ionicStrength({ Mg: 5.5 })
+    expect(I).toBeCloseTo(mgMol * 2, 12)
     expect(w.saturationIndex).toBeCloseTo(
-      Math.log10(mgMol * oh * oh) + 11.25,
+      Math.log10(mgMol * oh * oh) +
+        daviesLogGamma(2, I) +
+        2 * daviesLogGamma(1, I) +
+        11.25,
       9,
     )
   })
@@ -218,7 +234,7 @@ describe('report: acid dosing end to end', () => {
   })
   const r = runOnsen(fugetsu)
 
-  it('adds muriatic acid to cancel the metasilicate hydroxide plus the card acidity', () => {
+  it('adds muriatic acid to cancel the metasilicate hydroxide and reach the card pH', () => {
     const acid = r.recipe.find((x) => x.saltId === 'hydrochloricAcid')!
     expect(acid).toBeDefined()
     expect(acid.millilitres).toBeCloseTo(
@@ -227,8 +243,12 @@ describe('report: acid dosing end to end', () => {
     )
     expect(r.readouts.acid).toBeDefined()
     const a = r.readouts.acid!
-    expect(a.mmolPerL).toBeCloseTo(a.hydroxideReleased + 0.1 / 1.008, 6)
-    expect(a.cardAcidityBasis).toBe('card H⁺/OH⁻ lines')
+    // Cancels the hydroxide, then the card's free acidity (pH 3.9 ≈ 0.13 mmol/L
+    // H⁺ plus the little sulfate that protonates to bisulfate there).
+    expect(a.mmolPerL).toBeGreaterThan(a.hydroxideReleased + 0.1 / 1.008)
+    expect(a.mmolPerL).toBeLessThan(a.hydroxideReleased + 0.3)
+    expect(a.basis).toBe('card pH')
+    expect(a.targetPh).toBe(3.9)
     expect(a.phWithoutAcid).toBeGreaterThan(11)
     // The metasilicate dose fixes the acid dose: 2 × mmol/L Na2SiO3·5H2O.
     const meta = r.recipe.find((x) => x.saltId === 'sodiumMetasilicate')!
@@ -238,9 +258,9 @@ describe('report: acid dosing end to end', () => {
     )
   })
 
-  it('leaves the bath at the card acidity with no hydroxide precipitation', () => {
-    expect(r.readouts.chargeResidual).toBeCloseTo(-0.1 / 1.008, 3)
-    expect(r.readouts.phEstimate).toBeCloseTo(4.0, 1)
+  it('leaves the bath at the card pH with no hydroxide precipitation', () => {
+    expect(r.readouts.chargeResidual).toBeLessThan(0)
+    expect(r.readouts.phEstimate).toBeCloseTo(3.9, 2)
     expect(r.readouts.precipitation.map((p) => p.mineral)).not.toContain(
       'brucite',
     )
@@ -262,7 +282,7 @@ describe('report: acid dosing end to end', () => {
     expect(txt).toMatch(/≈ \d+ mL/)
     expect(txt).toContain('Hydroxide: sodium metasilicate releases')
     expect(txt).toContain('Order of addition')
-    expect(txt).toContain('Estimated pH 4.0 (card 3.9)')
+    expect(txt).toContain('Estimated pH 3.9 (card 3.9)')
     expect(txt).not.toContain('a positive residual here is expected')
   })
 

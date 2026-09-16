@@ -13,6 +13,7 @@ npm run onsen -- <analysis.json> --json      # same data as JSON
 cat analysis.json | npm run onsen --         # stdin
 npm run onsen -- oni.json --from-onsenoni    # input is an Onsen Oni get_water_analysis payload
 npm run onsen -- oni.json --from-onsenoni --source kutani --bath 60gal
+npm run onsen -- <analysis.json> --acid citric   # one acid instead of all four
 ```
 
 Exit codes: `0` success, `1` invalid input (each problem listed on stderr with
@@ -113,45 +114,71 @@ JSON and pass `--from-onsenoni`; `src/lib/onsen/onsenoni.ts` converts it:
 `notes` is also a plain optional field on the canonical input: an array of
 strings echoed verbatim under Warnings.
 
-### Hydroxide, acid and pH
+### Hydroxide, acid and pH — four acids, four recipes
 
 The only retail source of the card's metasilicic acid (H₂SiO₃) is sodium
 metasilicate, and it dissolves to 2 Na⁺ + silicate + **2 OH⁻**. Dosed on its
 own it puts a bath at pH ≈ 11–12 and drops the calcium and magnesium out as
 hydroxide / silicate solids — the opposite of a weakly acidic chloride spring.
-So after the fit the CLI:
+And a bicarbonate spring's pH (typically 6.5–7) is set by the free CO₂ it
+carries, which no salt supplies: baking soda alone sits at pH ≈ 8.3.
 
-1. Sums the hydroxide the dosed salts release (each salt's `netCharge` × its
-   mmol/L; only sodium metasilicate has one, +2).
-2. Reads the free acidity the card itself reports — its `H` (hydrogen-ion) and
-   `OH` rows if present, else its `ph`, else zero.
-3. Doses **muriatic acid** (14.5 % hydrochloric acid, the half-strength hardware-store grade on hand;
-   the salt id is `hydrochloricAcid`, defined as the retail solution so the
-   dose is grams as poured, with the volume printed next to it) equal to the
-   released hydroxide plus the card acidity, then re-runs the fit with that
-   acid's chloride credited to the source water so the sodium-chloride dose
-   comes down to match. Two or three passes converge.
-4. Estimates the bath pH of the final profile from a full proton balance
-   over the carbonate (pKa 6.35 / 10.33), silicic-acid (9.84 / 13.2) and
-   water systems, bisected to 60 steps, activity = concentration, 25 °C.
-5. Screens the final profile at that pH for brucite Mg(OH)₂ (log Ksp −11.25),
-   portlandite Ca(OH)₂ (−5.3), calcium/magnesium silicate hydrate (a
-   threshold: pH ≥ 10 with Ca or Mg and dissolved silica present — these
-   gels have no single Ksp), and amorphous silica at 40 °C (Gunnarsson &
-   Arnórsson 2000; ≈ 200 mg/L as H₂SiO₃), which most silica-rich springs
-   exceed — the water is metastable, as the spring itself is once cooled, and
-   polymerises slowest near pH 3–4.
+So after the fit the CLI produces **one recipe per acid** in `ACIDS`:
 
-The acid is **not a fit variable** and pH is **never fitted**: the acid only
-cancels hydroxide the ingredients add and sets the card's own free acidity.
-A card whose pH is set by unfitted buffers (free CO₂) will still read
-differently; the report says so when the estimate is more than half a unit
-off. Hydrochloric acid is `ACIDS`, never in `SALT_ORDER`, so the solver's
-recipe policy and the drinking-water app never see it. The `hydrochloricAcid`
-line carries handling notes: add the acid to the bath water first, then the
-other salts, then the metasilicate dissolved in a bucket, poured in slowly —
-silica gels fastest at pH 7–9, so the bath must already be acidic when it
-goes in.
+| id                 | product                                         | protons/mol | what it leaves behind                          |
+| ------------------ | ----------------------------------------------- | ----------: | ---------------------------------------------- |
+| `hydrochloricAcid` | muriatic acid, 14.5 % HCl (liquid, 1.07 g/mL)    |           1 | Cl⁻ — an onsen ion, credited to the fit        |
+| `lacticAcid`       | food-grade lactic acid, 88 % (liquid, 1.20 g/mL) |           1 | lactate — not an onsen ion, reported           |
+| `citricAcid`       | food-grade citric acid, anhydrous powder         |           3 | citrate — not an onsen ion, reported; binds some Ca/Mg |
+| `sodiumBisulfate`  | pool "pH decreaser" NaHSO₄, anhydrous            |           1 | Na⁺ + SO₄²⁻ — onsen ions, credited to the fit  |
+
+For each acid:
+
+1. **Target pH** = the card `ph`; else the card's `H` / `OH` line; else
+   "just cancel the hydroxide the salts release" (resolved as the pH a strong
+   acid at that dose would give, so all four land in the same place).
+2. **Dose by bisection** on the full proton balance until the modelled bath
+   pH equals the target. The balance covers carbonate (pKa 6.35 / 10.33),
+   silicic acid (9.84 / 13.2), sulfate/bisulfate (1.99), the acid's own
+   anion (lactate 3.86; citrate 3.13 / 4.76 / 6.40), boron from the card's
+   HBO₂ / H₃BO₃ line (9.24) and water; activity = concentration, 25 °C.
+   Weak acids therefore need fewer moles per proton than their formula says
+   when the target pH is near a pKa — citric at pH 6.8 delivers ~2.7 H⁺.
+3. **Carbon compensation.** Protons beyond the hydroxide turn bicarbonate
+   into dissolved CO₂. The bicarbonate that is lost is added back to the fit
+   target and the fit re-run, so the card's bicarbonate still matches *at
+   the target pH* and the bath carries the CO₂ the card's pH implies. A
+   `dissolved CO₂` row in the Match table compares that to the card's free
+   CO₂ line (cards are rarely self-consistent to better than ±30 % here; pH
+   and bicarbonate win).
+4. **Credits.** Ions the acid adds that the engine models (Cl⁻; Na⁺ + SO₄²⁻)
+   are credited to the source water so the fit takes less salt. Anions it
+   does not model (lactate, citrate) go into the proton balance and appear
+   as "from the acid / not an onsen ion" lines. Muriatic acid therefore fits
+   chloride springs best; the organic acids leave Na⁺ high and Cl⁻ low by
+   ~10–15 % on a chloride spring because nothing else supplies chloride
+   without sodium; bisulfate only suits sulfate-rich cards.
+5. **Precipitation at the final pH**: gypsum, calcite (carbonate speciated
+   at that pH), brucite Mg(OH)₂ (log Ksp −11.25), portlandite Ca(OH)₂ (−5.3),
+   calcium/magnesium silicate hydrate (pH ≥ 10 with Ca or Mg and silica),
+   amorphous silica at 40 °C (Gunnarsson & Arnórsson 2000). The ionic
+   saturation indices use **Davies activity coefficients** at the bath's
+   ionic strength; the pH estimate does not.
+6. **Ranking**: composition first (largest |difference| over the card's
+   fitted ions, whole-percent buckets), then the number of precipitation
+   flags the acid can change, then |estimated − card pH|, then `ACIDS`
+   order. The winner is marked `*` in the summary table; all four are
+   printed.
+
+pH is **never a fit variable** in the least-squares step; the acid dose is
+solved afterwards. A card whose pH sits above what the salts give (a strongly
+alkaline carbonate spring) gets no acid and no base — the report says so.
+Acids live in `ACIDS`, never in `SALT_ORDER`, so the solver's recipe policy
+and the drinking-water app never see them. Each acid line carries handling
+notes; the shared "Order of addition" warning applies to all four: acid into
+the tub first, then the other salts, then the metasilicate dissolved in a
+bucket, poured in slowly — silica gels fastest at pH 7–9, so the bath must
+already be acidic when it goes in.
 
 ## Output
 
@@ -163,38 +190,56 @@ Markdown tables for pasting into a file. Sections:
 # Onsen bath recipe — <name>
 Bath volume, card units, spring type, temperature, card pH.
 
-## Recipe
+## Acid options
+| Acid | Dose for bath | Est. pH | Worst ion off | Precipitation | Extra ions |
+* suggested: <acid> (composition first, then precipitation, then pH)
+
+## Recipe N of 4 — <acid>          (repeated for each acid)
+### Recipe
 | Ingredient (purchaseName) | Formula | Grams for bath | g/L |
 Liquid: <ingredient>: <g> g ≈ <mL> mL (density)   — one line per liquid
-
-## Match
+### Match
 | Ion | Target mg/L | Result mg/L | Difference (%) |
+  … plus a `dissolved CO₂` row and, for lactic/citric, a "(from the acid)" row
 TDS, sulfate:chloride and estimated pH (card pH) of the result.
+### Warnings — the per-acid list below
 
 ## Not replicated
 | Component | Card value (as given, with unit) | mg/L | Why |
 
-## Warnings
+## General warnings — order of addition, sulfur/iron notice, notes
+
+Per-acid warnings
 - saturation warnings (gypsum / calcite saturation index)
 - gypsum solubility-ceiling clamp, if it hit
 - any fitted ion more than 10 % off the card; any ion added as a by-product
 - source-water ions already above the card (salts cannot remove them)
 - the acid's chloride alone exceeding the card's chloride, if it does
-- hydroxide accounting: meq/L released, acid dosed, the pH without the acid
-- charge residual of the result vs the card's fitted ions (meq/L)
+- ions the acid itself overshoots (its chloride / sulfate above the card)
+- the acid's by-product anion (lactate / citrate), mg/L and grams
+- acid accounting: mmol/L and meq/L dosed, target pH and its basis, the
+  hydroxide cancelled, the CO₂ made and the extra bicarbonate fitted, the pH
+  without acid; a cap notice if 500 mmol/L could not reach the target
+- charge residual of the fitted ions vs the card's (meq/L)
 - approximate pH from the proton balance, next to the card pH (and a note
   when they differ by more than 0.5)
-- precipitation checks: brucite, portlandite, silicate hydrate, amorphous silica
-- muriatic-acid volume, grade and safety; order of addition
-- the sulfur/iron exclusion notice, when those species are on the card
+- precipitation checks: gypsum, calcite, brucite, portlandite, silicate
+  hydrate, amorphous silica
+- handling: grams (and mL) of the acid for the bath plus its safety note
 ```
 
-`--json` prints the same data as one object: `recipe[]` (with `millilitres`
-on liquid lines), `match[]`, `notReplicated[]`, `readouts` (`tds`,
+`--json` prints one object: `variants[]` (one per acid: `acid`, `acidLabel`,
+`recipe[]` with `millilitres` on liquid lines, `match[]` including the
+`CO2` row, `extraIons[]`, `readouts`, `warnings[]`, `worstDiffPct`,
+`precipitationCount`), `suggested`, `sharedWarnings[]`, `notReplicated[]`,
+and — mirroring `variants[0]` (muriatic) for older callers — top-level
+`recipe`, `match`, `readouts` and `warnings`. `readouts` holds `tds`,
 `chargeResidual`, `targetChargeResidual`, `sulfateChlorideRatio`,
 `phEstimate`, `cardPh?`, `gypsumCeilingHit`, `saturation[]`,
-`precipitation[]`, `acid?` = `{ saltId, mmolPerL, hydroxideReleased,
-cardAcidity, cardAcidityBasis, phWithoutAcid }`) and `warnings[]`.
+`precipitation[]` and `acid?` = `{ saltId, mmolPerL, protonsMeqPerL,
+hydroxideReleased, targetPh, basis, phWithoutAcid,
+extraBicarbonateMmolPerL, dissolvedCo2MgPerL, capped }`. `--acid <name>`
+trims `variants` to one.
 
 ### How the fit works
 
@@ -228,14 +273,21 @@ cardAcidity, cardAcidityBasis, phWithoutAcid }`) and `warnings[]`.
   (Na₂SO₄), `potassiumChloride` (KCl), `sodiumMetasilicate` (Na₂SiO₃·5H₂O),
   all with molar masses summed from atomic weights; `purchaseName` on every
   salt; `netCharge` = water's counter-ion per mole (+2 OH⁻ on sodium
-  metasilicate, −1 H⁺ on hydrochloric acid); `hydrochloricAcid` (14.5 %
-  muriatic acid, `densityGPerMl`) in `ACIDS`, outside `SALT_ORDER`;
-  `ONSEN_PALETTE`, the on-hand subset the onsen layer fits over.
+  metasilicate, −1 H⁺ on hydrochloric / lactic acid and sodium bisulfate,
+  −3 on citric acid); `ACIDS` = `hydrochloricAcid` (14.5 % muriatic,
+  `densityGPerMl`), `lacticAcid` (88 %, `densityGPerMl`), `citricAcid`
+  (anhydrous) and `sodiumBisulfate`, all outside `SALT_ORDER`; `acidAnion`
+  (key, label, molar mass, charge, pKas) on the two organic acids;
+  `handling` notes; `ONSEN_PALETTE`, the on-hand subset the onsen layer
+  fits over.
 - `src/lib/solver/solve.ts` — fifth `solve()` argument `{ weighting }`;
   `estimatePh()`; `Readouts.phEstimate`.
 - `src/lib/solver/oracle.ts` — driver ions for the new salts.
 - `src/lib/onsen/` — input types, validation, normalisation, species table,
-  `chemistry.ts` (hydroxide / acid accounting, proton-balance pH,
-  precipitation checks), run + Markdown report.
+  `chemistry.ts` (hydroxide accounting, proton balance with polyprotic
+  organic acids / sulfate / borate, `acidDoseForPh` bisection, Davies
+  activity coefficients, precipitation checks), `report.ts` (per-acid
+  fit-and-dose loop with carbon compensation, ranking, Markdown),
+  `text.ts` (bordered text with the acid summary and one block per acid).
 - `src/cli/onsen.ts` + `scripts/onsen.mjs` — the CLI, executed through
   Vite's `runnerImport` (no new dependency).

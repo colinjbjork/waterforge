@@ -27,6 +27,7 @@ import {
   OH_WEIGHT,
   SALTS,
 } from '../chem/constants'
+import { EXTRA_SPECIES } from './species'
 import type { IonId, SaltId } from '../chem/constants'
 import type { IonProfile, SaltDose } from '../solver/types'
 import type { NormalizedOnsen } from './types'
@@ -43,7 +44,45 @@ export const PKA = {
   silicic2: 13.2,
   /** H₂O ⇌ H⁺ + OH⁻ */
   water: 14.0,
+  /** HSO₄⁻ ⇌ SO₄²⁻ + H⁺ (only matters below pH ~3) */
+  bisulfate: 1.99,
+  /** B(OH)₃ + H₂O ⇌ B(OH)₄⁻ + H⁺ (the card's metaboric acid) */
+  boric: 9.24,
 } as const
+
+/** log10 Ksp (25 °C) of calcite, CaCO₃, screened at the bath's actual pH. */
+export const LOG_KSP_CALCITE = -8.48
+/** log10 Ksp (25 °C) of gypsum, CaSO₄·2H₂O. */
+export const LOG_KSP_GYPSUM = -4.58
+
+/**
+ * Ionic strength (mol/L) of a profile: ½ Σ c z² over the modelled ions plus
+ * the dosed acid's anion at its full charge. Feeds the Davies correction.
+ */
+export function ionicStrength(
+  profile: IonProfile,
+  extras: WeakExtras = {},
+): number {
+  let i = 0
+  for (const ion of ION_ORDER) {
+    const z = IONS[ion].charge
+    i += mol(profile, ion) * z * z
+  }
+  for (const o of extras.organic ?? []) {
+    const z = o.pkas.length
+    i += o.mol * z * z
+  }
+  return i / 2
+}
+
+/**
+ * Davies equation: log10 of the activity coefficient of an ion of charge z at
+ * ionic strength I (mol/L), 25 °C. Good to I ≈ 0.5, which covers any bath.
+ */
+export function daviesLogGamma(z: number, ionicStrengthMolar: number): number {
+  const sq = Math.sqrt(ionicStrengthMolar)
+  return -0.51 * z * z * (sq / (1 + sq) - 0.3 * ionicStrengthMolar)
+}
 
 /** log10 Ksp (25 °C) of the hydroxides screened. */
 export const LOG_KSP_HYDROXIDE = {
@@ -81,17 +120,57 @@ function mol(profile: IonProfile, ion: IonId): number {
 
 /**
  * Strong-ion difference (mol/L): cation equivalents minus the equivalents of
- * the anions that stay fully ionised at any bath pH (Cl⁻, SO₄²⁻). Whatever is
- * left over must be balanced by the weak-acid anions (HCO₃⁻, CO₃²⁻, the
- * silicate anions) and water's own OH⁻ / H⁺ — which is what fixes the pH.
+ * the anion that stays fully ionised at any bath pH (Cl⁻). Whatever is left
+ * over must be balanced by the weak-acid anions (HCO₃⁻, CO₃²⁻, the silicate
+ * anions, sulfate / bisulfate, the dosed acid's anion, borate) and water's
+ * own OH⁻ / H⁺ — which is what fixes the pH.
  */
 export function strongIonDifference(profile: IonProfile): number {
   let s = 0
   for (const ion of ION_ORDER) {
-    if (ion === 'HCO3' || ion === 'CO3' || ion === 'H2SiO3') continue
+    if (
+      ion === 'HCO3' ||
+      ion === 'CO3' ||
+      ion === 'H2SiO3' ||
+      ion === 'SO4'
+    )
+      continue
     s += mol(profile, ion) * IONS[ion].charge
   }
   return s
+}
+
+/**
+ * Weak systems in the bath that are not modelled ions: the dosed acid's own
+ * anion (lactate, citrate) and the card's boron. All amounts in mol/L.
+ */
+export interface WeakExtras {
+  organic?: readonly { mol: number; pkas: readonly number[] }[]
+  boronMol?: number
+}
+
+/**
+ * Fractions of the n+1 forms of an n-protic acid at [H⁺] = h, from the fully
+ * protonated form (index 0) to the fully deprotonated anion (index n).
+ */
+export function polyproticFractions(
+  h: number,
+  pkas: readonly number[],
+): number[] {
+  const n = pkas.length
+  const terms: number[] = []
+  let kprod = 1
+  for (let i = 0; i <= n; i++) {
+    if (i > 0) kprod *= 10 ** -pkas[i - 1]
+    terms.push(h ** (n - i) * kprod)
+  }
+  const d = terms.reduce((a, b) => a + b, 0)
+  return terms.map((t) => t / d)
+}
+
+/** Mean negative charge per mole of an n-protic acid's anion pool at [H⁺] = h. */
+export function anionEquivalents(h: number, pkas: readonly number[]): number {
+  return polyproticFractions(h, pkas).reduce((acc, f, i) => acc + i * f, 0)
 }
 
 /** Species concentrations (mol/L) of a profile at a given pH. */
@@ -105,6 +184,12 @@ export interface Speciation {
   h4sio4: number
   hsio3: number
   sio3: number
+  hso4: number
+  so4: number
+  /** Charge equivalents (mol/L) carried by the dosed acid's anion. */
+  organicEq: number
+  /** Borate B(OH)₄⁻ from the card's boron. */
+  borate: number
 }
 
 /** Fractions of a diprotic acid's three forms at [H⁺] = h. */
@@ -123,13 +208,25 @@ function diproticFractions(
  * Distribute the profile's total carbonate and total silica over their acid /
  * base forms at the given pH (activity = concentration).
  */
-export function speciate(profile: IonProfile, ph: number): Speciation {
+export function speciate(
+  profile: IonProfile,
+  ph: number,
+  extras: WeakExtras = {},
+): Speciation {
   const h = 10 ** -ph
   const oh = 10 ** (ph - PKA.water)
   const cT = mol(profile, 'HCO3') + mol(profile, 'CO3')
   const siT = mol(profile, 'H2SiO3')
+  const sT = mol(profile, 'SO4')
   const [c0, c1, c2] = diproticFractions(h, PKA.carbonic1, PKA.carbonic2)
   const [s0, s1, s2] = diproticFractions(h, PKA.silicic1, PKA.silicic2)
+  const [b0, b1] = polyproticFractions(h, [PKA.bisulfate])
+  let organicEq = 0
+  for (const o of extras.organic ?? []) {
+    organicEq += o.mol * anionEquivalents(h, o.pkas)
+  }
+  const borate =
+    (extras.boronMol ?? 0) * polyproticFractions(h, [PKA.boric])[1]
   return {
     h,
     oh,
@@ -139,6 +236,10 @@ export function speciate(profile: IonProfile, ph: number): Speciation {
     h4sio4: siT * s0,
     hsio3: siT * s1,
     sio3: siT * s2,
+    hso4: sT * b0,
+    so4: sT * b1,
+    organicEq,
+    borate,
   }
 }
 
@@ -146,13 +247,21 @@ export function speciate(profile: IonProfile, ph: number): Speciation {
  * Proton-balance residual at a trial pH: (weak-acid anion equivalents + OH⁻
  * − H⁺) − strong-ion difference. Zero at the true pH; increases with pH.
  */
-export function protonBalance(profile: IonProfile, ph: number): number {
-  const s = speciate(profile, ph)
+export function protonBalance(
+  profile: IonProfile,
+  ph: number,
+  extras: WeakExtras = {},
+): number {
+  const s = speciate(profile, ph, extras)
   return (
     s.hco3 +
     2 * s.co3 +
     s.hsio3 +
     2 * s.sio3 +
+    s.hso4 +
+    2 * s.so4 +
+    s.organicEq +
+    s.borate +
     s.oh -
     s.h -
     strongIonDifference(profile)
@@ -164,17 +273,92 @@ export function protonBalance(profile: IonProfile, ph: number): number {
  * Pure water (or any balanced strong-electrolyte solution) returns 7.0.
  * Clamped to 0–14.
  */
-export function estimateBathPh(profile: IonProfile): number {
+export function estimateBathPh(
+  profile: IonProfile,
+  extras: WeakExtras = {},
+): number {
   let lo = 0
   let hi = 14
-  if (protonBalance(profile, lo) >= 0) return lo
-  if (protonBalance(profile, hi) <= 0) return hi
+  if (protonBalance(profile, lo, extras) >= 0) return lo
+  if (protonBalance(profile, hi, extras) <= 0) return hi
   for (let i = 0; i < 60; i++) {
     const mid = (lo + hi) / 2
-    if (protonBalance(profile, mid) < 0) lo = mid
+    if (protonBalance(profile, mid, extras) < 0) lo = mid
     else hi = mid
   }
   return (lo + hi) / 2
+}
+
+/** Boron on the card (metaboric / boric acid lines), mol/L, for the proton balance. */
+export function cardBoronMol(norm: NormalizedOnsen): number {
+  let b = 0
+  for (const n of norm.notReplicated) {
+    if ((n.key === 'HBO2' || n.key === 'H3BO3') && n.mgPerL !== undefined) {
+      b += n.mgPerL / EXTRA_SPECIES[n.key].molarMass / 1000
+    }
+  }
+  return b
+}
+
+/** What a dose of an acid adds to the bath: modelled ions (mg/L) and extras. */
+export interface AcidAddition {
+  profile: IonProfile
+  extras: WeakExtras
+}
+
+/** The bath with `mmolPerL` of the acid added to `profile` + `extras`. */
+export function withAcid(
+  profile: IonProfile,
+  extras: WeakExtras,
+  acidId: SaltId,
+  mmolPerL: number,
+): AcidAddition {
+  const salt = SALTS[acidId]
+  const out: IonProfile = { ...profile }
+  for (const [ion, moles] of Object.entries(salt.stoichiometry) as [
+    IonId,
+    number,
+  ][]) {
+    out[ion] = (out[ion] ?? 0) + mmolPerL * moles * IONS[ion].molarMass
+  }
+  const organic = [...(extras.organic ?? [])]
+  if (salt.acidAnion && mmolPerL > 0) {
+    organic.push({ mol: mmolPerL / 1000, pkas: salt.acidAnion.pkas })
+  }
+  const merged: WeakExtras = { organic }
+  if (extras.boronMol !== undefined) merged.boronMol = extras.boronMol
+  return { profile: out, extras: merged }
+}
+
+/** Upper bound on any acid dose (mmol/L); hitting it means the card pH is unreachable. */
+export const ACID_DOSE_CAP_MMOL_PER_L = 500
+
+/**
+ * The dose (mmol/L) of `acidId` that brings the bath to `targetPh`, by
+ * bisection on the proton balance (pH falls monotonically with acid). Zero
+ * when the bath is already at or below the target without acid; the cap when
+ * even the cap cannot reach it.
+ */
+export function acidDoseForPh(
+  profile: IonProfile,
+  extras: WeakExtras,
+  acidId: SaltId,
+  targetPh: number,
+): { mmolPerL: number; capped: boolean } {
+  const phAt = (a: number): number => {
+    const w = withAcid(profile, extras, acidId, a)
+    return estimateBathPh(w.profile, w.extras)
+  }
+  if (phAt(0) <= targetPh) return { mmolPerL: 0, capped: false }
+  let lo = 0
+  let hi = ACID_DOSE_CAP_MMOL_PER_L
+  if (phAt(hi) > targetPh) return { mmolPerL: hi, capped: true }
+  for (let i = 0; i < 80; i++) {
+    const mid = (lo + hi) / 2
+    if (phAt(mid) > targetPh) lo = mid
+    else hi = mid
+  }
+  return { mmolPerL: (lo + hi) / 2, capped: false }
 }
 
 /** mmol/L of a salt at a dose in g/L. */
@@ -241,7 +425,12 @@ export function cardAcidity(norm: NormalizedOnsen): CardAcidity {
 }
 
 export type PrecipitateMineral =
-  'brucite' | 'portlandite' | 'silicate-hydrate' | 'amorphous-silica'
+  | 'gypsum'
+  | 'calcite'
+  | 'brucite'
+  | 'portlandite'
+  | 'silicate-hydrate'
+  | 'amorphous-silica'
 
 export interface PrecipitationWarning {
   mineral: PrecipitateMineral
@@ -253,23 +442,52 @@ export interface PrecipitationWarning {
 const sign = (n: number): string => (n >= 0 ? '+' : '')
 
 /**
- * What falls out of a result profile at its estimated pH. Gypsum and calcite
- * are screened by the solver already; this covers what the hydroxide /
- * silicate chemistry adds.
+ * What falls out of a result profile at its estimated pH: gypsum, calcite
+ * (carbonate speciated at that pH), brucite, portlandite, calcium/magnesium
+ * silicate hydrate and amorphous silica. Ionic saturation indices use Davies
+ * activity coefficients at the bath's ionic strength, so a hard, salty bath
+ * is not flagged just for being concentrated; the pH itself is still
+ * estimated with activity = concentration.
  */
 export function precipitationWarnings(
   profile: IonProfile,
   ph: number,
   bathTempC: number = BATH_TEMPERATURE_C,
+  extras: WeakExtras = {},
 ): PrecipitationWarning[] {
   const out: PrecipitationWarning[] = []
-  const s = speciate(profile, ph)
+  const s = speciate(profile, ph, extras)
   const mg = mol(profile, 'Mg')
   const ca = mol(profile, 'Ca')
+  const so4 = mol(profile, 'SO4')
   const siT = mol(profile, 'H2SiO3')
+  const I = ionicStrength(profile, extras)
+  const lg1 = daviesLogGamma(1, I)
+  const lg2 = daviesLogGamma(2, I)
 
+  if (ca > 0 && so4 > 0) {
+    const si = Math.log10(ca * so4) + 2 * lg2 - LOG_KSP_GYPSUM
+    if (si >= 0) {
+      out.push({
+        mineral: 'gypsum',
+        saturationIndex: si,
+        message: `Gypsum CaSO₄ is at or above saturation (SI ${sign(si)}${si.toFixed(1)}, Davies-corrected at I = ${I.toFixed(3)} M): some calcium sulfate may not dissolve.`,
+      })
+    }
+  }
+  if (ca > 0 && s.co3 > 0) {
+    const si = Math.log10(ca * s.co3) + 2 * lg2 - LOG_KSP_CALCITE
+    if (si >= 0) {
+      out.push({
+        mineral: 'calcite',
+        saturationIndex: si,
+        message: `Calcite CaCO₃ is supersaturated at the estimated pH ${ph.toFixed(1)} (SI ${sign(si)}${si.toFixed(1)}, carbonate speciated at that pH, Davies-corrected at I = ${I.toFixed(3)} M): expect calcium carbonate haze or scale; a lower pH holds more of the carbonate as bicarbonate and keeps it dissolved.`,
+      })
+    }
+  }
   if (mg > 0) {
-    const si = Math.log10(mg * s.oh * s.oh) - LOG_KSP_HYDROXIDE.brucite
+    const si =
+      Math.log10(mg * s.oh * s.oh) + lg2 + 2 * lg1 - LOG_KSP_HYDROXIDE.brucite
     if (si >= 0) {
       out.push({
         mineral: 'brucite',
@@ -279,7 +497,11 @@ export function precipitationWarnings(
     }
   }
   if (ca > 0) {
-    const si = Math.log10(ca * s.oh * s.oh) - LOG_KSP_HYDROXIDE.portlandite
+    const si =
+      Math.log10(ca * s.oh * s.oh) +
+      lg2 +
+      2 * lg1 -
+      LOG_KSP_HYDROXIDE.portlandite
     if (si >= 0) {
       out.push({
         mineral: 'portlandite',

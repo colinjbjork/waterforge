@@ -24,6 +24,7 @@ import {
   validateOnsenInput,
 } from '../lib/onsen'
 import type { OnsenInput } from '../lib/onsen'
+import type { SaltId } from '../lib/chem/constants'
 
 export interface CliOutcome {
   code: number
@@ -33,6 +34,7 @@ export interface CliOutcome {
 
 const USAGE = `usage: onsen [<analysis.json> | -] [--json | --markdown]
              [--from-onsenoni [--source <n|id|name>]] [--bath <litres>[L|gal]]
+             [--acid muriatic|lactic|citric|bisulfate]
   Reads the onsen analysis JSON from the given file (or stdin when omitted or
   "-") and prints a home-bath recipe as a bordered text report (default),
   as Markdown with --markdown, or as JSON with --json.
@@ -40,7 +42,16 @@ const USAGE = `usage: onsen [<analysis.json> | -] [--json | --markdown]
                    (onsenoni.com via the OpenTabs plugin); --source picks
                    which spring source when the place lists several.
   --bath           override the bath volume, e.g. --bath 200 or --bath 60gal.
+  --acid           print only the recipe for that acid (default: all four).
   Schema: docs/onsen-input.md`
+
+const ACID_FLAGS: Record<string, SaltId> = {
+  muriatic: 'hydrochloricAcid',
+  hcl: 'hydrochloricAcid',
+  lactic: 'lacticAcid',
+  citric: 'citricAcid',
+  bisulfate: 'sodiumBisulfate',
+}
 
 /** Pure entry point: argv (without node/script) + a stdin reader → outcome. */
 export function runCli(argv: string[], readStdin: () => string): CliOutcome {
@@ -49,6 +60,7 @@ export function runCli(argv: string[], readStdin: () => string): CliOutcome {
   let oniMode = false
   let source: string | undefined
   let bath: OnsenInput['bath_volume'] | undefined
+  let acid: SaltId | undefined
   let path: string | undefined
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
@@ -77,6 +89,18 @@ export function runCli(argv: string[], readStdin: () => string): CliOutcome {
       bath = {
         value: Number(m[1]),
         unit: m[2]?.toLowerCase() === 'gal' ? 'gal' : 'L',
+      }
+    } else if (arg === '--acid') {
+      const v = (argv[++i] ?? '').toLowerCase()
+      acid = ACID_FLAGS[v]
+      if (acid === undefined) {
+        return {
+          code: 2,
+          stdout: '',
+          stderr: `--acid needs one of ${Object.keys(ACID_FLAGS).join(', ')}
+${USAGE}
+`,
+        }
       }
     } else if (arg === '--help' || arg === '-h') {
       return { code: 0, stdout: USAGE + '\n', stderr: '' }
@@ -158,6 +182,9 @@ export function runCli(argv: string[], readStdin: () => string): CliOutcome {
   }
 
   const result = runOnsen(normalizeOnsen(validated.value))
+  if (acid !== undefined) {
+    result.variants = result.variants.filter((v) => v.acid === acid)
+  }
   const stdout = json
     ? JSON.stringify(result, null, 2) + '\n'
     : markdown
